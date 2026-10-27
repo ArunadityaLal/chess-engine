@@ -1,0 +1,15 @@
+build/
+*.o
+*.d
+.DS_Store
+.vscode/
+*.dSYM/
+
+# test/tuning artifacts
+*.pgn
+*.epd.bak
+data/
+nets/
+
+# fastchess autosave
+config.json
