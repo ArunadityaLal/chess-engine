@@ -6,6 +6,7 @@ build/
 *.dSYM/
 
 # test/tuning artifacts
+books/
 *.pgn
 *.epd.bak
 data/
@@ -13,3 +14,6 @@ nets/
 
 # fastchess autosave
 config.json
+
+# Python
+__pycache__/

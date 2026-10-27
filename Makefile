@@ -3,6 +3,7 @@
 #          make run        -> build release and start it
 #          make test       -> quick self-tests on the sanitized debug build
 #          make perft      -> full perft gate on the release build
+#          make bench      -> bench signature (node count) for commit messages
 #          make clean
 
 EXE      := engine
@@ -27,7 +28,7 @@ OUT  := build/$(BUILD)
 OBJS := $(SRCS:src/%.cpp=$(OUT)/%.o)
 BIN  := $(OUT)/$(EXE)
 
-.PHONY: all release debug run test perft clean
+.PHONY: all release debug run test perft bench clean
 
 all: $(BIN)
 
@@ -45,6 +46,9 @@ test: debug
 
 perft: release
 	./build/release/$(EXE) test full
+
+bench: release
+	@./build/release/$(EXE) bench | grep -E "Nodes searched|NPS"
 
 $(BIN): $(OBJS)
 	$(CXX) $(LDFLAGS) $^ -o $@

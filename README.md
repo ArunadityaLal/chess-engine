@@ -11,8 +11,34 @@ make debug    # ASan + UBSan     -> build/debug/engine
 make run      # build release and start it
 make test     # quick self-tests on the debug build (asserts + sanitizers, ~1 min)
 make perft    # full gate on the release build: deep perft + deep minimax oracle (~1 min)
+make bench    # bench signature: node count of a fixed search, for commit messages
 make clean
 ```
+
+## Testing a change (SPRT)
+
+Every change that is supposed to make the engine stronger has to prove it in games:
+
+1. Make the change, run `make test`.
+2. `make bench`. If the node count didn't change, the change doesn't affect play: commit it.
+3. `python3 tools/sprt.py` plays your uncommitted version against the last commit until the
+   SPRT decides (books and both builds are handled automatically).
+   - **H1 accepted**: it's stronger. Commit, with the bench and the printed summary in the message.
+   - **H0 accepted**: it isn't. Revert, however good the idea seemed.
+4. For removals or simplifications: `python3 tools/sprt.py --bounds simplify` (passes if not weaker).
+
+Other uses:
+
+```sh
+python3 tools/sprt.py --base HEAD~1 --dev HEAD          # compare two commits
+python3 tools/sprt.py --dev-option Eval=PeSTO --base-option Eval=Learned --games 200
+python3 tools/sprt.py --tc 2+0.02                       # faster games (less reliable)
+```
+
+Defaults: 8+0.08 time control, 8moves_v3 openings (each played with both colors),
+SPRT bounds [0, 5] normalized Elo, alpha = beta = 0.05. At this time control the machine
+plays about 1,000 games an hour, so a 10,000-game test runs overnight. Runs are saved under
+`build/sprt/runs/` and every result is appended to `build/sprt/history.txt`.
 
 Requires `clang++` with C++20 support.
 
