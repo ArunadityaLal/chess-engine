@@ -13,6 +13,7 @@
 #include "perft.h"
 #include "position.h"
 #include "search.h"
+#include "tt.h"
 
 namespace {
 
@@ -259,6 +260,7 @@ void test_search(bool full) {
     for (const bool quiescence : {false, true}) {
         EngineOptions options;
         options.quiescence = quiescence;
+        options.exact      = true;
         const int maxDepth = quiescence ? (full ? 2 : 1) : (full ? 4 : 3);
         int       mismatches = 0;
         const std::vector<std::string> fens = bench_fens();
@@ -281,6 +283,62 @@ void test_search(bool full) {
                                + " leaves), depths 1-" + std::to_string(maxDepth) + " on "
                                + std::to_string(fens.size()) + " positions");
     }
+}
+
+void test_see() {
+    struct Case {
+        const char* fen;
+        const char* move;
+        int         value;  // exact SEE result
+    };
+    const Case cases[] = {
+        // rook takes an undefended pawn
+        {"1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", "e1e5", 100},
+        // knight takes a pawn defended by a knight: the whole exchange nets P - N
+        {"1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1", "d3e5", -200},
+        // queen steps onto a square a pawn attacks
+        {"6k1/8/3p4/8/4Q3/8/8/4K3 w - - 0 1", "e4e5", -900},
+        // pawn takes a knight defended by a pawn
+        {"4k3/8/2p5/3n4/4P3/8/8/4K3 w - - 0 1", "e4d5", 200},
+        // rook takes rook; the king recaptures, nothing defends
+        {"4k3/8/8/8/8/8/3r4/3RK3 b - - 0 1", "d2d1", 0},
+        // king takes an undefended rook
+        {"4k3/8/8/8/8/8/3r4/3RK3 w - - 0 1", "e1d2", 500},
+    };
+    int bad = 0;
+    for (const Case& c : cases) {
+        Position pos;
+        pos.set(c.fen);
+        const Move m = parse_uci_move(pos, c.move);
+        if (!m.is_ok() || !pos.see_ge(m, c.value) || pos.see_ge(m, c.value + 1)) {
+            ++bad;
+            std::cout << "  SEE wrong for " << c.move << " in " << c.fen << '\n';
+        }
+    }
+    check(!bad, "static exchange evaluation on " + std::to_string(std::size(cases))
+                    + " exchanges");
+}
+
+void test_tt() {
+    TranspositionTable tt;
+    tt.resize(1);
+    const Key  key = 0x9E3779B97F4A7C15ull;
+    const Move m(E2, E4);
+    TTEntry    e;
+    check(!tt.probe(key, e), "TT: empty table has no entry");
+
+    tt.store(key, m, 123, 7, BOUND_LOWER);
+    check(tt.probe(key, e) && e.move == m && e.score == 123 && e.depth == 7
+              && e.bound() == BOUND_LOWER,
+          "TT: store then probe returns the entry");
+
+    tt.store(key, Move::none(), -50, 8, BOUND_UPPER);
+    check(tt.probe(key, e) && e.move == m && e.score == -50 && e.bound() == BOUND_UPPER,
+          "TT: a fail-low keeps the known best move");
+
+    check(!tt.probe(key ^ 1, e), "TT: a different key misses");
+    tt.clear();
+    check(!tt.probe(key, e), "TT: clear empties the table");
 }
 
 void test_perft(bool full) {
@@ -323,6 +381,8 @@ bool run_tests(bool full) {
     test_draws();
     test_perft(full);
     test_eval();
+    test_see();
+    test_tt();
     test_search(full);
 
     const auto s = std::chrono::duration_cast<std::chrono::seconds>(
@@ -341,6 +401,8 @@ void run_bench(int depth) {
     uint64_t   total = 0;
     const auto start = std::chrono::steady_clock::now();
     for (const std::string& fen : bench_fens()) {
+        TT.clear();  // each position from scratch: the signature can't depend on order
+        searcher.clear();
         Position pos;
         pos.set(fen);
         const SearchResult r = searcher.search(pos, limits, EngineOptions{}, false);

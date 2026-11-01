@@ -31,6 +31,7 @@ Other uses:
 
 ```sh
 python3 tools/sprt.py --base HEAD~1 --dev HEAD          # compare two commits
+python3 tools/sprt.py --base path/to/engine             # against an engine binary
 python3 tools/sprt.py --dev-option Eval=PeSTO --base-option Eval=Learned --games 200
 python3 tools/sprt.py --tc 2+0.02                       # faster games (less reliable)
 ```
@@ -58,6 +59,7 @@ E=$PWD/build/release/engine
 
 | Option | Default | |
 |---|---|---|
+| Hash | 16 | Transposition table size in MB (cleared by `ucinewgame`) |
 | MultiPV | 1 | Report the N best lines |
 | ThinkAloud | false | Explain each search iteration in plain language (`info string [think] ...`) |
 | Move Overhead | 30 | Milliseconds kept in reserve per move for GUI lag |
@@ -87,7 +89,7 @@ eval              breakdown of the evaluation: material, placement, phase, each 
 evalparams        the active evaluation's weights, in EvalFile format
 threats [depth]   what the opponent would do if it were their move
 perft <depth>     perft with per-move breakdown (also: go perft <depth>)
-bench [depth]     fixed-depth search over fixed positions; node count is a fingerprint
+bench [depth]     fixed-depth search (default 13) over fixed positions; node count is a fingerprint
 test [full]       self-tests
 ```
 

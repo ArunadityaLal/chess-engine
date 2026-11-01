@@ -59,8 +59,15 @@ class Position {
     void make_move(Move m);
     void unmake_move(Move m);
 
+    // Static exchange evaluation: if both sides keep capturing on the move's target
+    // square, always with their least valuable piece and stopping when that would lose,
+    // does the mover come out at least `threshold` centipawns ahead? Uses fixed values
+    // P 100, N 300, B 300, R 500, Q 900 (not the eval's), and ignores pins and checks.
+    bool see_ge(Move m, int threshold) const;
+
     // Pass the turn. Not a legal chess move: used to ask "what is the opponent
-    // threatening?" (and later for null-move pruning). Never call while in check.
+    // threatening?" and for null-move pruning. Never call while in check. Resets the
+    // 50-move counter, so no repetition is detected across the pass.
     void make_null_move();
     void unmake_null_move();
 

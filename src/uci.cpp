@@ -13,6 +13,7 @@
 #include "position.h"
 #include "search.h"
 #include "tests.h"
+#include "tt.h"
 
 namespace {
 
@@ -80,7 +81,9 @@ void cmd_setoption(EngineOptions& options, Position& pos, std::istringstream& is
     std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     const bool on = value == "true";
     try {
-        if (name == "multipv")
+        if (name == "hash")
+            TT.resize(std::clamp(std::stoi(value), 1, 65536));
+        else if (name == "multipv")
             options.multiPV = std::clamp(std::stoi(value), 1, 64);
         else if (name == "move overhead")
             options.moveOverhead = std::clamp(std::stoi(value), 0, 5000);
@@ -165,6 +168,7 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
     if (cmd == "uci")
         UCI::send("id name engine\n"
                   "id author Arunaditya Lal\n"
+                  "option name Hash type spin default 16 min 1 max 65536\n"
                   "option name MultiPV type spin default 1 min 1 max 64\n"
                   "option name Move Overhead type spin default 30 min 0 max 5000\n"
                   "option name ThinkAloud type check default false\n"
@@ -176,8 +180,11 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
         UCI::send("readyok");
     else if (cmd == "setoption")
         cmd_setoption(options, pos, is);
-    else if (cmd == "ucinewgame")
+    else if (cmd == "ucinewgame") {
         pos.set(StartFEN);
+        TT.clear();
+        searcher.clear();
+    }
     else if (cmd == "position")
         cmd_position(pos, is);
     else if (cmd == "go") {
@@ -210,7 +217,7 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
         is >> depth;
         perft_divide(pos, depth);
     } else if (cmd == "bench") {
-        int depth = 6;
+        int depth = 13;  // deep enough that the pruning near the leaves and above shows up
         is >> depth;
         run_bench(depth);
     } else if (cmd == "test") {

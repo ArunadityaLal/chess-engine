@@ -33,6 +33,8 @@ struct EngineOptions {
     bool thinkAloud   = false;  // explain each iteration in plain language
     bool randomMover  = false;  // play random legal moves (a test opponent)
     bool quiescence   = true;   // tests only: false evaluates leaves statically
+    bool exact        = false;  // tests only: plain fixed-depth alpha-beta (no table cutoffs,
+                                // pruning, reductions or extensions), so scores equal minimax
 };
 
 struct RootMove {
@@ -58,6 +60,9 @@ class Searcher {
     void stop();  // ask the running search to finish; it still prints bestmove
     void wait();  // block until the search thread is done
 
+    // Forget move-ordering knowledge from earlier searches (new game). Only call when idle.
+    void clear();
+
     // Synchronous, for tests, bench and analysis commands. Only call when idle.
     SearchResult search(const Position& pos, const SearchLimits& limits,
                         const EngineOptions& options, bool print);
@@ -73,9 +78,12 @@ class Searcher {
   private:
     void         run();
     SearchResult think(const Position& pos, bool print);
-    void         search_root(Position& pos, int depth, int pvIdx);
-    int          negamax(Position& pos, int depth, int ply, int alpha, int beta);
+    int          search_root(Position& pos, int depth, int pvIdx, int alpha, int beta);
+    int          negamax(Position& pos, int depth, int ply, int alpha, int beta,
+                         bool canNull = true);
     int          qsearch(Position& pos, int ply, int alpha, int beta);
+    void         update_quiet_stats(Color us, int ply, int depth, Move best, const Move* quiets,
+                                    int quietCount);
     int          minimax(Position& pos, int depth, int ply);
     int          minimax_q(Position& pos, int ply);
 
@@ -106,4 +114,6 @@ class Searcher {
     Move                                  pvTable[MAX_PLY][MAX_PLY];
     int                                   pvLength[MAX_PLY];
     Move                                  pvHint[MAX_PLY];  // previous iteration's best line
+    Move                                  killers[MAX_PLY][2];
+    int                                   history[COLOR_NB][SQUARE_NB][SQUARE_NB];
 };

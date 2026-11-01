@@ -359,7 +359,7 @@ void Position::make_null_move() {
     assert(!in_check());
     StateInfo next = st();
     next.captured  = NO_PIECE;
-    ++next.halfmove;
+    next.halfmove  = 0;  // a pass breaks the line: no repetition reaches back across it
     next.key ^= Zobrist::side;
     if (next.ep != NO_SQUARE) {
         next.key ^= Zobrist::enpassant[file_of(next.ep)];
@@ -374,6 +374,55 @@ void Position::unmake_null_move() {
     history.pop_back();
     sideToMove = ~sideToMove;
     --gamePly;
+}
+
+namespace {
+constexpr int SeeValue[PIECE_TYPE_NB] = {100, 300, 300, 500, 900, 0};
+}
+
+// The swap algorithm: `swap` tracks how far the side to move must still gain for the
+// result to reach the threshold, flipping viewpoint at each capture. Sliders behind a
+// capturing piece join in as it leaves (x-rays).
+bool Position::see_ge(Move m, int threshold) const {
+    if (m.type() != NORMAL)
+        return 0 >= threshold;  // castling, en passant, promotions: not worth the detail
+
+    const Square from = m.from(), to = m.to();
+    int swap = (piece_on(to) == NO_PIECE ? 0 : SeeValue[type_of(piece_on(to))]) - threshold;
+    if (swap < 0)
+        return false;  // even keeping the captured piece for free isn't enough
+    swap = SeeValue[type_of(piece_on(from))] - swap;
+    if (swap <= 0)
+        return true;  // even losing the moved piece still reaches the threshold
+
+    Bitboard occ       = pieces() ^ square_bb(from) ^ square_bb(to);
+    Bitboard attackers = attackers_to(to, occ);
+    Color    stm       = sideToMove;
+    int      res       = 1;
+    while (true) {
+        stm = ~stm;
+        attackers &= occ;
+        const Bitboard stmAttackers = attackers & pieces(stm);
+        if (!stmAttackers)
+            break;
+        res ^= 1;
+
+        // Least valuable attacker first.
+        PieceType pt = PAWN;
+        while (!(stmAttackers & pieces(pt)))
+            pt = PieceType(pt + 1);
+        if (pt == KING)  // the king may only capture last: if anything still defends, it can't
+            return (attackers & pieces(~stm)) ? res ^ 1 : res;
+
+        if ((swap = SeeValue[pt] - swap) < res)
+            break;
+        occ ^= square_bb(lsb(stmAttackers & pieces(pt)));
+        if (pt == PAWN || pt == BISHOP || pt == QUEEN)
+            attackers |= bishop_attacks(to, occ) & pieces(BISHOP, QUEEN);
+        if (pt == ROOK || pt == QUEEN)
+            attackers |= rook_attacks(to, occ) & pieces(ROOK, QUEEN);
+    }
+    return res;
 }
 
 bool Position::is_draw() const {

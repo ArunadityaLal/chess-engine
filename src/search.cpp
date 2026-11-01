@@ -1,10 +1,13 @@
 #include "search.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <span>
 
 #include "eval.h"
 #include "movegen.h"
+#include "tt.h"
 #include "uci.h"
 
 namespace {
@@ -16,23 +19,57 @@ bool is_tactical(const Position& pos, Move m) {
 }
 
 // Move ordering. Alpha-beta prunes most when the best move is tried first:
-// 1. the move from the previous iteration's best line,
-// 2. captures, most valuable victim first, then least valuable attacker (MVV-LVA),
-// 3. queen promotions, 4. everything else.
-void score_moves(const Position& pos, const MoveList& list, int* scores, Move hint) {
+// 1. the best move stored in the transposition table for this position,
+// 2. the move from the previous iteration's best line,
+// 3. captures that don't lose material (SEE), most valuable victim first, then least
+//    valuable attacker (MVV-LVA),
+// 4. queen promotions,
+// 5. killers: quiet moves that caused a cutoff at the same ply elsewhere in the tree,
+// 6. other quiet moves, by history: how often each from-to move caused cutoffs,
+// 7. captures that lose material.
+// Only generated moves are scored, so a stale table move can never be played.
+void score_moves(const Position& pos, const MoveList& list, int* scores, Move ttMove, Move hint,
+                 const Move* killers = nullptr, const int (*history)[SQUARE_NB] = nullptr) {
     for (int i = 0; i < list.size(); ++i) {
         const Move m = list.moves[i];
-        if (m == hint)
+        if (m == ttMove)
+            scores[i] = 2'000'000;
+        else if (m == hint)
             scores[i] = 1'000'000;
         else if (pos.piece_on(m.to()) != NO_PIECE || m.type() == EN_PASSANT) {
             const PieceType victim = m.type() == EN_PASSANT ? PAWN : type_of(pos.piece_on(m.to()));
-            scores[i] = 100'000 + 10 * victim - type_of(pos.piece_on(m.from()));
+            scores[i] = (pos.see_ge(m, 0) ? 100'000 : -100'000) + 10 * victim
+                      - type_of(pos.piece_on(m.from()));
         } else if (m.type() == PROMOTION && m.promotion_type() == QUEEN)
             scores[i] = 90'000;
+        else if (killers && m == killers[0])
+            scores[i] = 80'001;
+        else if (killers && m == killers[1])
+            scores[i] = 80'000;
         else
-            scores[i] = 0;
+            scores[i] = history ? history[m.from()][m.to()] : 0;  // within +-HistoryMax
     }
 }
+
+// History scores move toward +-HistoryMax and saturate there ("gravity"), so recent
+// results count more than old ones.
+constexpr int HistoryMax = 16384;
+
+void add_history(int& h, int bonus) {
+    h += bonus - h * std::abs(bonus) / HistoryMax;
+}
+
+// Late move reductions by [depth][move number]: deeper nodes and later moves are
+// reduced more, growing like log(depth) * log(moves).
+struct ReductionTable {
+    int r[MAX_PLY][MAX_MOVES];
+    ReductionTable() {
+        for (int d = 0; d < MAX_PLY; ++d)
+            for (int n = 0; n < MAX_MOVES; ++n)
+                r[d][n] = d && n ? int(0.75 + std::log(d) * std::log(n) / 2.25) : 0;
+    }
+};
+const ReductionTable Reductions;
 
 // Selection sort, one step: bring the best remaining move to index i. Cheaper than a
 // full sort because a cutoff usually comes after the first few moves.
@@ -44,6 +81,16 @@ Move pick_next(MoveList& list, int* scores, int i) {
     std::swap(list.moves[i], list.moves[best]);
     std::swap(scores[i], scores[best]);
     return list.moves[i];
+}
+
+// Mate scores count plies from the root, but a table entry can be reached at any ply:
+// store them counted from the node itself, and convert back when reading.
+int score_to_tt(int s, int ply) {
+    return s >= MATE_BOUND ? s + ply : s <= -MATE_BOUND ? s - ply : s;
+}
+
+int score_from_tt(int s, int ply) {
+    return s >= MATE_BOUND ? s - ply : s <= -MATE_BOUND ? s + ply : s;
 }
 
 std::string uci_score(int s) {
@@ -69,7 +116,12 @@ std::string human_score(int s, Color us) {
 
 }  // namespace
 
-Searcher::Searcher() : rng(std::random_device{}()) {}
+Searcher::Searcher() : rng(std::random_device{}()) { clear(); }
+
+void Searcher::clear() {
+    std::fill(&killers[0][0], &killers[0][0] + MAX_PLY * 2, Move::none());
+    std::fill(&history[0][0][0], &history[0][0][0] + COLOR_NB * SQUARE_NB * SQUARE_NB, 0);
+}
 
 Searcher::~Searcher() {
     stop();
@@ -128,14 +180,20 @@ SearchResult Searcher::think(const Position& pos, bool print) {
     nodes     = 0;
     aborted   = false;
     std::fill(std::begin(pvHint), std::end(pvHint), Move::none());
+    // Killers belong to positions of the previous search; history still says something
+    // about the same game, with half the weight.
+    std::fill(&killers[0][0], &killers[0][0] + MAX_PLY * 2, Move::none());
+    for (int& h : std::span(&history[0][0][0], COLOR_NB * SQUARE_NB * SQUARE_NB))
+        h /= 2;
 
     Position root = pos;
     set_time_limits(root.side_to_move());
+    TT.new_search();
 
     MoveList legal;
     generate_legal(root, legal);
     int scores[MAX_MOVES];
-    score_moves(root, legal, scores, Move::none());
+    score_moves(root, legal, scores, Move::none(), Move::none());
     rootMoves.clear();
     for (int i = 0; i < legal.size(); ++i)
         rootMoves.push_back({pick_next(legal, scores, i), -INF, {}});
@@ -158,8 +216,29 @@ SearchResult Searcher::think(const Position& pos, bool print) {
 
     for (int depth = 1; depth <= maxDepth; ++depth) {
         selDepth = 0;
-        for (int pvIdx = 0; pvIdx < multiPV && !aborted; ++pvIdx)
-            search_root(root, depth, pvIdx);
+        for (int pvIdx = 0; pvIdx < multiPV && !aborted; ++pvIdx) {
+            // Aspiration window: the score will probably be close to the last iteration's,
+            // and a narrow window prunes more. If it lands outside, widen and search again.
+            int delta = 25, alpha = -INF, beta = INF;
+            if (depth >= 5 && pvIdx < int(result.lines.size())
+                && std::abs(result.lines[pvIdx].score) < MATE_BOUND) {
+                alpha = result.lines[pvIdx].score - delta;
+                beta  = result.lines[pvIdx].score + delta;
+            }
+            while (true) {
+                const int score = search_root(root, depth, pvIdx, alpha, beta);
+                if (aborted)
+                    break;
+                if (score <= alpha) {  // fail low: worse than expected
+                    beta  = (alpha + beta) / 2;
+                    alpha = std::max(score - delta, -INF);
+                } else if (score >= beta)  // fail high: better than expected
+                    beta = std::min(score + delta, INF);
+                else
+                    break;
+                delta += delta / 2;
+            }
+        }
         if (aborted)
             break;  // keep the last completed iteration
 
@@ -201,54 +280,144 @@ SearchResult Searcher::think(const Position& pos, bool print) {
     return result;
 }
 
-// Root moves [pvIdx, end) are searched with a full window; the best of them lands at
-// pvIdx with an exact score. Calling this for pvIdx = 0, 1, 2 gives MultiPV lines.
-void Searcher::search_root(Position& pos, int depth, int pvIdx) {
-    int alpha = -INF;
+// Root moves [pvIdx, end) are searched, the first with the window [alpha, beta] and the
+// rest as in negamax (PVS); the best of them lands at pvIdx. Its score is exact if it is
+// inside the window; the return value is the best score, to tell. Calling this for
+// pvIdx = 0, 1, 2 gives MultiPV lines.
+int Searcher::search_root(Position& pos, int depth, int pvIdx, int alpha, int beta) {
+    for (size_t i = pvIdx; i < rootMoves.size(); ++i)
+        rootMoves[i].score = -INF;  // left from the last iteration; the order is kept
+
+    int best = -INF;
     for (size_t i = pvIdx; i < rootMoves.size(); ++i) {
         RootMove& rm = rootMoves[i];
         pos.make_move(rm.move);
         ++nodes;
-        const int score = -negamax(pos, depth - 1, 1, -INF, -alpha);
+        int score;
+        if (i == size_t(pvIdx))
+            score = -negamax(pos, depth - 1, 1, -beta, -alpha);
+        else {
+            score = -negamax(pos, depth - 1, 1, -alpha - 1, -alpha);
+            if (score > alpha && score < beta && !aborted)
+                score = -negamax(pos, depth - 1, 1, -beta, -alpha);
+        }
         pos.unmake_move(rm.move);
         if (aborted)
-            return;
+            return 0;
 
-        if (score > alpha) {
+        best = std::max(best, score);
+        if (score > alpha) {  // otherwise only an upper bound: stays -INF and sorts behind
             alpha    = score;
             rm.score = score;
             rm.pv.assign(1, rm.move);
             rm.pv.insert(rm.pv.end(), &pvTable[1][1], &pvTable[1][pvLength[1]]);
-        } else
-            rm.score = -INF;  // only an upper bound; sorts behind, keeping the old order
+            if (score >= beta)
+                break;  // fail high: the caller searches again with a wider window
+        }
     }
     std::stable_sort(rootMoves.begin() + pvIdx, rootMoves.end(),
                      [](const RootMove& a, const RootMove& b) { return a.score > b.score; });
+    return best;
 }
 
 // Fail-soft alpha-beta in negamax form: every score is from the side to move's view, so
 // a child's score is negated. [alpha, beta] is the window of scores that still matter:
 // a move scoring >= beta means the opponent will avoid this position anyway (cutoff).
-int Searcher::negamax(Position& pos, int depth, int ply, int alpha, int beta) {
+//
+// Principal variation search: with good move ordering the first move is usually best, so
+// the others are only asked "are you better than alpha?" with a null window
+// [alpha, alpha + 1], which is much cheaper. Only a move that says yes is searched again
+// with the full window to get its exact score. PV nodes (window wider than null) are the
+// ones on the expected best line.
+int Searcher::negamax(Position& pos, int depth, int ply, int alpha, int beta, bool canNull) {
+    const bool pvNode = beta - alpha > 1;
     pvLength[ply] = ply;
     if (should_stop())
         return 0;
     if (pos.is_draw())
         return 0;
+
+    // Check extension: a check must be answered and leaves few replies, so searching it
+    // one ply deeper is cheap, and it stops forcing sequences from vanishing over the
+    // horizon. This also keeps checks out of quiescence's stand-pat.
+    const bool inCheck = pos.in_check();
+    if (inCheck && !options.exact)
+        ++depth;
+
     if (depth <= 0)
         return options.quiescence ? qsearch(pos, ply, alpha, beta) : Eval::evaluate(pos);
     if (ply >= MAX_PLY - 1)
         return Eval::evaluate(pos);
 
-    const bool inCheck = pos.in_check();
-    MoveList   list;
+    // A stored result at least as deep as this search settles the node if its bound
+    // fits the window. Not on PV nodes: the line shown to the user would be cut short.
+    TTEntry    tte;
+    const bool ttHit  = TT.probe(pos.key(), tte);
+    const Move ttMove = ttHit ? tte.move : Move::none();
+    if (ttHit && !pvNode && !options.exact && tte.depth >= depth) {
+        const int s = score_from_tt(tte.score, ply);
+        if (tte.bound() == BOUND_EXACT || (tte.bound() == BOUND_LOWER && s >= beta)
+            || (tte.bound() == BOUND_UPPER && s <= alpha))
+            return s;
+    }
+
+    const Color us         = pos.side_to_move();
+    const int   staticEval = inCheck ? -INF : Eval::evaluate(pos);
+
+    // Internal iterative reduction: with no stored move, this node was never searched
+    // before and its move ordering is poor. Search it a ply shallower; the result fills
+    // the table, so the next iteration finds it ordered properly.
+    if (depth >= 4 && !ttMove.is_ok() && !options.exact)
+        --depth;
+
+    // Reverse futility pruning: near the leaves, if the position is already so far above
+    // beta that no realistic loss over the remaining plies brings it back, stop here.
+    // The margin grows with depth because more can go wrong in more moves.
+    if (!pvNode && !inCheck && !options.exact && depth <= 6 && std::abs(beta) < MATE_BOUND
+        && staticEval - 90 * depth >= beta)
+        return staticEval;
+
+    // Null move pruning: let the opponent move twice in a row. If a reduced search still
+    // fails high, a real move would almost certainly do so too. The exception is
+    // zugzwang, where passing would be the best move; it is common when only king and
+    // pawns are left, so those positions are excluded. Two passes in a row prove nothing.
+    if (!pvNode && !inCheck && canNull && !options.exact && depth >= 3
+        && (pos.pieces(us) & ~pos.pieces(PAWN, KING)) && staticEval >= beta) {
+        const int R = 3 + depth / 6;
+        pos.make_null_move();
+        ++nodes;
+        const int score = -negamax(pos, depth - 1 - R, ply + 1, -beta, -beta + 1, false);
+        pos.unmake_null_move();
+        if (aborted)
+            return 0;
+        if (score >= beta)
+            return score >= MATE_BOUND ? beta : score;  // a mate found by passing isn't proven
+    }
+
+    const int origAlpha = alpha;
+    MoveList  list;
     generate_pseudo_legal(pos, list);
     int scores[MAX_MOVES];
-    score_moves(pos, list, scores, pvHint[ply]);
+    score_moves(pos, list, scores, ttMove, pvHint[ply], killers[ply], history[us]);
 
-    int best = -INF, legal = 0;
+    int  best = -INF, legal = 0, quietCount = 0;
+    Move bestMove = Move::none();
+    Move quiets[MAX_MOVES];  // quiet moves searched without a cutoff
     for (int i = 0; i < list.size(); ++i) {
-        const Move m = pick_next(list, scores, i);
+        const Move m     = pick_next(list, scores, i);
+        const bool quiet = !is_tactical(pos, m);
+
+        // Shallow pruning of quiet moves, once some move has kept us from being mated:
+        // late move pruning (with good ordering, a quiet move this far down the list
+        // almost never matters near the leaves) and futility pruning (the position is so
+        // far below alpha that a quiet move won't make up the difference in time).
+        if (!pvNode && !inCheck && quiet && best > -MATE_BOUND && !options.exact) {
+            if (depth <= 4 && quietCount >= 3 + depth * depth)
+                continue;
+            if (depth <= 6 && staticEval + 100 + 100 * depth <= alpha)
+                continue;
+        }
+
         pos.make_move(m);
         if (pos.mover_in_check()) {
             pos.unmake_move(m);
@@ -256,7 +425,26 @@ int Searcher::negamax(Position& pos, int depth, int ply, int alpha, int beta) {
         }
         ++legal;
         ++nodes;
-        const int score = -negamax(pos, depth - 1, ply + 1, -beta, -alpha);
+        int score;
+        if (legal == 1)
+            score = -negamax(pos, depth - 1, ply + 1, -beta, -alpha);
+        else {
+            // Late move reductions: with good ordering, a quiet move this far down the
+            // list rarely turns out best, so search it shallower first. If it beats
+            // alpha anyway, it gets the full depth. Never reduced: captures, checks,
+            // check evasions and killers.
+            int r = 0;
+            if (depth >= 3 && quiet && !inCheck && !options.exact && !pos.in_check()
+                && m != killers[ply][0] && m != killers[ply][1]) {
+                r = Reductions.r[depth][legal] - pvNode;
+                r = std::clamp(r, 0, depth - 2);
+            }
+            score = -negamax(pos, depth - 1 - r, ply + 1, -alpha - 1, -alpha);
+            if (score > alpha && r > 0 && !aborted)
+                score = -negamax(pos, depth - 1, ply + 1, -alpha - 1, -alpha);
+            if (score > alpha && score < beta && !aborted)
+                score = -negamax(pos, depth - 1, ply + 1, -beta, -alpha);
+        }
         pos.unmake_move(m);
         if (aborted)
             return 0;
@@ -264,28 +452,64 @@ int Searcher::negamax(Position& pos, int depth, int ply, int alpha, int beta) {
         if (score > best) {
             best = score;
             if (score > alpha) {
-                alpha = score;
+                alpha    = score;
+                bestMove = m;
                 update_pv(ply, m);
-                if (alpha >= beta)
+                if (alpha >= beta) {
+                    if (quiet)
+                        update_quiet_stats(us, ply, depth, m, quiets, quietCount);
                     break;
+                }
             }
         }
+        if (quiet)
+            quiets[quietCount++] = m;
     }
 
     if (!legal)
         return inCheck ? -MATE + ply : 0;  // checkmate (sooner is worse) or stalemate
+
+    const Bound bound = best >= beta ? BOUND_LOWER : best > origAlpha ? BOUND_EXACT : BOUND_UPPER;
+    TT.store(pos.key(), bestMove, score_to_tt(best, ply), depth, bound);
     return best;
+}
+
+// A quiet move caused a cutoff: remember it as a killer for this ply, raise its history
+// and lower the history of the quiet moves tried before it, which didn't.
+void Searcher::update_quiet_stats(Color us, int ply, int depth, Move best, const Move* quiets,
+                                  int quietCount) {
+    if (killers[ply][0] != best) {
+        killers[ply][1] = killers[ply][0];
+        killers[ply][0] = best;
+    }
+    const int bonus = std::min(32 * depth * depth, 2048);
+    add_history(history[us][best.from()][best.to()], bonus);
+    for (int i = 0; i < quietCount; ++i)
+        add_history(history[us][quiets[i].from()][quiets[i].to()], -bonus);
 }
 
 // Quiescence search: at the end of the main search, keep playing captures until the
 // position is quiet, so the eval never sees a half-finished exchange (horizon effect).
 int Searcher::qsearch(Position& pos, int ply, int alpha, int beta) {
+    const bool pvNode = beta - alpha > 1;
     pvLength[ply] = ply;
     if (should_stop())
         return 0;
     selDepth = std::max(selDepth, ply);
     if (ply >= MAX_PLY - 1)
         return Eval::evaluate(pos);
+
+    // Any stored result is at least as deep as quiescence (depth 0).
+    TTEntry    tte;
+    const bool ttHit  = TT.probe(pos.key(), tte);
+    const Move ttMove = ttHit ? tte.move : Move::none();
+    if (ttHit && !pvNode && !options.exact) {
+        const int s = score_from_tt(tte.score, ply);
+        if (tte.bound() == BOUND_EXACT || (tte.bound() == BOUND_LOWER && s >= beta)
+            || (tte.bound() == BOUND_UPPER && s <= alpha))
+            return s;
+    }
+    const int origAlpha = alpha;
 
     // Stand pat: the side to move isn't forced to capture, so the static eval is a lower
     // bound. In check there is no such option: every evasion must be searched.
@@ -301,12 +525,16 @@ int Searcher::qsearch(Position& pos, int ply, int alpha, int beta) {
     MoveList list;
     generate_pseudo_legal(pos, list);
     int scores[MAX_MOVES];
-    score_moves(pos, list, scores, Move::none());
+    score_moves(pos, list, scores, ttMove, Move::none());
 
-    int legal = 0;
+    int  legal    = 0;
+    Move bestMove = Move::none();
     for (int i = 0; i < list.size(); ++i) {
         const Move m = pick_next(list, scores, i);
         if (!inCheck && !is_tactical(pos, m))
+            continue;
+        // A capture that loses material won't help a side that could stand pat instead.
+        if (!inCheck && !options.exact && !pos.see_ge(m, 0))
             continue;
         pos.make_move(m);
         if (pos.mover_in_check()) {
@@ -323,7 +551,8 @@ int Searcher::qsearch(Position& pos, int ply, int alpha, int beta) {
         if (score > best) {
             best = score;
             if (score > alpha) {
-                alpha = score;
+                alpha    = score;
+                bestMove = m;
                 update_pv(ply, m);
                 if (alpha >= beta)
                     break;
@@ -333,6 +562,9 @@ int Searcher::qsearch(Position& pos, int ply, int alpha, int beta) {
 
     if (inCheck && !legal)
         return -MATE + ply;
+
+    const Bound bound = best >= beta ? BOUND_LOWER : best > origAlpha ? BOUND_EXACT : BOUND_UPPER;
+    TT.store(pos.key(), bestMove, score_to_tt(best, ply), 0, bound);
     return best;
 }
 
@@ -350,6 +582,8 @@ int Searcher::minimax(const Position& pos, int depth, const EngineOptions& o) {
 int Searcher::quiescence(const Position& pos, bool bruteForce) {
     Position p    = pos;
     limits        = {};
+    options       = {};
+    options.exact = true;
     softLimit     = hardLimit = 0;
     stopRequested = false;
     aborted       = false;
@@ -414,12 +648,18 @@ void Searcher::set_time_limits(Color us) {
     if (limits.movetime)
         softLimit = hardLimit = std::max<int64_t>(1, limits.movetime - options.moveOverhead);
     else if (limits.time[us]) {
-        const int64_t time   = limits.time[us];
-        const int64_t usable = std::max<int64_t>(1, time - options.moveOverhead);
+        const int64_t time = limits.time[us];
+        const int64_t inc  = limits.inc[us];
+        // Never plan to spend the reserve: under CPU load the OS can stall the engine for
+        // 50-100 ms on any move, and a clock run down to a few tens of ms then flags.
+        // Below the reserve only part of the increment is spent, so the clock grows back.
+        const int64_t reserve = 100 + 2 * options.moveOverhead;
+        const int64_t spare   = std::max<int64_t>(0, time - options.moveOverhead - reserve);
         // Without movestogo, plan as if 30 more moves are needed (sudden death).
         const int movesLeft = limits.movestogo ? std::min(limits.movestogo, 40) : 30;
-        hardLimit = std::max<int64_t>(1, usable * 3 / 4);
-        softLimit = std::min(hardLimit, time / movesLeft + limits.inc[us] * 3 / 4);
+        hardLimit = std::min(spare * 3 / 4 + inc / 2, time - options.moveOverhead);
+        hardLimit = std::max<int64_t>(1, hardLimit);
+        softLimit = std::clamp<int64_t>(spare / movesLeft + inc * 3 / 4, 1, hardLimit);
         hardLimit = std::min(hardLimit, softLimit * 4);
     }
 }
@@ -458,8 +698,8 @@ void Searcher::report(int depth, int lines) const {
         UCI::send("info depth " + std::to_string(depth) + " seldepth " + std::to_string(selDepth)
                   + " multipv " + std::to_string(i + 1) + " score " + uci_score(rm.score)
                   + " nodes " + std::to_string(nodes) + " nps "
-                  + std::to_string(nodes * 1000 / (ms + 1)) + " time " + std::to_string(ms)
-                  + " pv" + pv);
+                  + std::to_string(nodes * 1000 / (ms + 1)) + " hashfull "
+                  + std::to_string(TT.hashfull()) + " time " + std::to_string(ms) + " pv" + pv);
     }
 }
 

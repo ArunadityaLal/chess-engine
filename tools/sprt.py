@@ -11,6 +11,7 @@ opening can't favor either side.
 Examples:
   python3 tools/sprt.py                          # uncommitted changes vs last commit
   python3 tools/sprt.py --base HEAD~1 --dev HEAD # last commit vs the one before
+  python3 tools/sprt.py --base build/sprt/engines/some-snapshot  # vs an engine binary
   python3 tools/sprt.py --bounds simplify        # removal: dev must not be weaker
   python3 tools/sprt.py --dev-option Eval=PeSTO --base-option Eval=Learned --games 200
 """
@@ -61,9 +62,13 @@ def get_book(name):
 
 
 def build(ref):
-    """Engine binary for a git ref, or for the current files when ref is 'worktree'."""
+    """Engine binary for a git ref, for the current files when ref is 'worktree', or an
+    existing engine binary given by path (to compare uncommitted versions)."""
     engines = WORK / "engines"
     engines.mkdir(parents=True, exist_ok=True)
+
+    if ref != "worktree" and Path(ref).is_file():
+        return Path(ref).name, Path(ref).resolve()
 
     if ref == "worktree":
         run(["make", "-j8"], cwd=ROOT)
@@ -121,8 +126,8 @@ def parse_bounds(text):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dev", default="worktree", help="git ref, or 'worktree' (default)")
-    ap.add_argument("--base", default="HEAD", help="git ref (default HEAD)")
+    ap.add_argument("--dev", default="worktree", help="git ref, engine binary, or 'worktree' (default)")
+    ap.add_argument("--base", default="HEAD", help="git ref or engine binary (default HEAD)")
     ap.add_argument("--dev-option", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--base-option", action="append", default=[], metavar="NAME=VALUE")
     ap.add_argument("--tc", default="8+0.08", help="seconds+increment (default 8+0.08)")
