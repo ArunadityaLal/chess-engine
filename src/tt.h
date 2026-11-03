@@ -1,7 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
-#include <vector>
+#include <memory>
 
 #include "types.h"
 
@@ -9,6 +10,7 @@
 // high), at most the score (UPPER: every move failed low), or exactly the score.
 enum Bound : uint8_t { BOUND_NONE, BOUND_UPPER, BOUND_LOWER, BOUND_EXACT };
 
+// A stored result, as read from the table.
 struct TTEntry {
     Key     key;    // full key: a wrong hit can't steer the search or the analysis
     Move    move;   // best move found, or none (an all-node keeps the previous move)
@@ -23,6 +25,10 @@ struct TTEntry {
 // Transposition table: the same position is often reached by different move orders,
 // and every iteration of iterative deepening revisits the previous one's tree. Results
 // are stored by hash key so they can be reused instead of searched again.
+//
+// Shared by all search threads without locks. Each entry is two 64-bit words, the data
+// and the key XORed with the data: an entry half-overwritten by another thread fails the
+// key check and reads as a miss (Hyatt and Mann's lockless hashing).
 class TranspositionTable {
   public:
     TranspositionTable() { resize(16); }
@@ -38,19 +44,22 @@ class TranspositionTable {
 
   private:
     static constexpr int BucketSize = 4;
+    struct Slot {
+        std::atomic<uint64_t> keyXorData{0};
+        std::atomic<uint64_t> data{0};  // move | score << 16 | depth << 32 | genBound << 40
+
+        TTEntry read() const;  // key is 0 if the slot is torn or empty
+        void    write(const TTEntry& e);
+    };
     struct alignas(64) Bucket {
-        TTEntry entries[BucketSize];
+        Slot slots[BucketSize];
     };
 
-    Bucket& bucket(Key key) {
-        return buckets[(unsigned __int128)key * buckets.size() >> 64];
-    }
-    const Bucket& bucket(Key key) const {
-        return buckets[(unsigned __int128)key * buckets.size() >> 64];
-    }
+    Bucket& bucket(Key key) const { return buckets[(unsigned __int128)key * count >> 64]; }
 
-    std::vector<Bucket> buckets;
-    int                 generation = 0;
+    std::unique_ptr<Bucket[]> buckets;
+    size_t                    count      = 0;
+    int                       generation = 0;
 };
 
 extern TranspositionTable TT;

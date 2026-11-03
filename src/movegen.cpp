@@ -119,6 +119,24 @@ Move parse_uci_move(Position& pos, const std::string& str) {
     return Move::none();
 }
 
+Move parse_san(Position& pos, const std::string& str) {
+    auto bare = [](std::string s) {  // without check marks and annotations; 0-0 as O-O
+        while (!s.empty() && std::string("+#!?").find(s.back()) != std::string::npos)
+            s.pop_back();
+        for (char& c : s)
+            if (c == '0')
+                c = 'O';
+        return s;
+    };
+    const std::string want = bare(str);
+    MoveList          list;
+    generate_legal(pos, list);
+    for (Move m : list)
+        if (bare(to_san(pos, m)) == want)
+            return m;
+    return Move::none();
+}
+
 std::string to_san(Position& pos, Move m) {
     const Square    from    = m.from(), to = m.to();
     const PieceType pt      = type_of(pos.piece_on(from));

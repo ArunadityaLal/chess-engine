@@ -30,6 +30,10 @@ void generate_legal(Position& pos, MoveList& list);
 // The legal move matching a UCI string like "e2e4" or "e7e8q", or Move::none().
 Move parse_uci_move(Position& pos, const std::string& str);
 
+// The legal move matching SAN like "Nbd7", "exd5", "O-O" or "e8=Q+" (check marks and
+// !? annotations optional), or Move::none().
+Move parse_san(Position& pos, const std::string& str);
+
 // Standard algebraic notation for a legal move: "Nbd7", "exd5", "O-O", "e8=Q+", "Qxf7#".
 std::string to_san(Position& pos, Move m);
 

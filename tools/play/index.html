@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Play the Engine</title>
+<style>
+:root {
+  --bg: #f4f4f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #dcdcdf;
+  --light: #eeeed2; --dark: #769656; --last: rgba(255, 235, 59, .45); --sel: rgba(20, 85, 30, .5);
+  --pre: rgba(215, 60, 50, .55); --dot: rgba(0, 0, 0, .22); --accent: #2f6fdb; --danger: #c62828;
+  --size: min(82vh, 640px, calc(100vw - 32px));
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1c1c1e; --panel: #2a2a2d; --text: #ececee; --muted: #9a9aa0; --line: #3a3a3e; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+main { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; align-items: flex-start; padding: 16px; }
+.side { display: flex; flex-direction: column; gap: 8px; }
+.player { display: flex; justify-content: space-between; align-items: center; width: var(--size); }
+.name { font-weight: 600; font-size: 15px; }
+.who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cap { display: flex; align-items: center; min-height: 20px; }
+.cap .pc { font-size: 21px; margin-right: -5px; cursor: default; }
+.cap .pc.w { -webkit-text-stroke: 1px #222; }
+.cap .pc.b { -webkit-text-stroke: .9px #b8b8bc; }
+.cap .gap { width: 10px; }
+.cap .adv { margin-left: 10px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.clock { font: 600 22px/1 "SF Mono", Menlo, monospace; padding: 6px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); min-width: 96px; text-align: right; }
+.clock.running { background: var(--text); color: var(--bg); }
+.clock.low { color: var(--danger); }
+.clock.running.low { background: var(--danger); color: #fff; }
+.board { width: var(--size); height: var(--size); display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr); border-radius: 4px; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+.sq { position: relative; display: flex; align-items: center; justify-content: center; }
+.sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+.sq.last::before, .sq.sel::before, .sq.pre::before, .sq.check::before { content: ""; position: absolute; inset: 0; }
+.sq.last::before { background: var(--last); }
+.sq.sel::before { background: var(--sel); }
+.sq.pre::before { background: var(--pre); }
+.sq.check::before { background: radial-gradient(circle, rgba(255,0,0,.85) 0%, rgba(255,0,0,.4) 45%, transparent 75%); }
+.sq.dot::after { content: ""; position: absolute; width: 30%; height: 30%; border-radius: 50%; background: var(--dot); }
+.sq.ring::after { content: ""; position: absolute; inset: 4%; border-radius: 50%; border: calc(var(--size) / 110) solid var(--dot); }
+.coord { position: absolute; font-size: calc(var(--size) / 48); font-weight: 600; pointer-events: none; }
+.coord.f { right: 3px; bottom: 1px; } .coord.r { left: 3px; top: 1px; }
+.sq.l .coord { color: var(--dark); } .sq.d .coord { color: var(--light); }
+.pc { position: relative; z-index: 1; font-size: calc(var(--size) / 8 * .8); line-height: 1; cursor: grab; font-family: "Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", serif; }
+.pc.w { color: #fff; -webkit-text-stroke: 1.4px #222; text-shadow: 0 1px 2px rgba(0,0,0,.35); }
+.pc.b { color: #151515; -webkit-text-stroke: .6px #000; }
+.pc.lifted { opacity: .25; }
+.ghost { position: fixed; pointer-events: none; z-index: 10; transform: translate(-50%, -50%); }
+.panel { width: 320px; max-width: calc(100vw - 32px); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+select, input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 5px 6px; }
+.check-row { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+button { font: inherit; font-weight: 600; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .45; cursor: default; }
+.status { font-weight: 600; min-height: 20px; }
+.note { color: var(--muted); font-size: 12px; min-height: 16px; }
+.moves { max-height: 260px; overflow-y: auto; font: 13px/1.6 "SF Mono", Menlo, monospace; border-top: 1px solid var(--line); padding-top: 8px; }
+.moves div { display: grid; grid-template-columns: 34px 1fr 1fr; }
+.moves span:first-child { color: var(--muted); }
+.thought { font-size: 12px; color: var(--muted); }
+details { border-top: 1px solid var(--line); padding-top: 8px; }
+summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+details .grid { margin-top: 10px; }
+.hint { font-size: 11px; line-height: 1.35; color: var(--muted); }
+.wide { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<main>
+  <div class="side">
+    <div class="player"><span class="who"><span class="name" id="topName">Engine</span><span class="cap" id="topCap"></span></span><span class="clock" id="topClock">5:00</span></div>
+    <div class="board" id="board"></div>
+    <div class="player"><span class="who"><span class="name" id="botName">You</span><span class="cap" id="botCap"></span></span><span class="clock" id="botClock">5:00</span></div>
+  </div>
+  <div class="panel">
+    <h2>New game</h2>
+    <div class="grid">
+      <label>Your colour
+        <select id="color"><option value="w">White</option><option value="b">Black</option><option value="r">Random</option></select></label>
+      <label>Time control
+        <select id="tc">
+          <option>1+0</option><option>3+0</option><option>3+2</option><option selected>5+0</option>
+          <option>5+3</option><option>10+0</option><option>10+5</option><option>15+10</option><option>30+0</option>
+        </select></label>
+      <label>Style
+        <select id="style"><option>Objective</option><option>Creative</option><option>Practical</option></select></label>
+      <label>Evaluation <select id="eval"><option>PeSTO</option></select></label>
+      <label>Variety (cp) <input id="variety" type="number" min="0" max="100" value="20"></label>
+      <label>Contempt (cp) <input id="contempt" type="number" min="-200" max="200" value="0"></label>
+    </div>
+    <details id="advanced">
+      <summary>More engine settings</summary>
+      <div class="grid" id="advGrid"></div>
+    </details>
+    <div class="buttons">
+      <button class="primary" id="newBtn">Start game</button>
+      <button id="resignBtn" disabled>Resign</button>
+      <button id="analyzeBtn" disabled>Analyse</button>
+    </div>
+    <div class="status" id="status">Choose settings and start a game.</div>
+    <div class="note" id="note">Premoves: make moves while the engine thinks. Right-click cancels them.</div>
+    <h2>During the game</h2>
+    <div class="grid">
+      <label>Promote to
+        <select id="promo"><option value="q">Queen</option><option value="r">Rook</option><option value="b">Bishop</option><option value="n">Knight</option></select></label>
+      <label class="check-row"><input type="checkbox" id="showThought"> Show engine's eval</label>
+    </div>
+    <div class="thought" id="thought"></div>
+    <div class="moves" id="moves"></div>
+  </div>
+</main>
+<script src="chess.min.js"></script>
+<script>
+"use strict";
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const FILES = "abcdefgh";
+const $ = id => document.getElementById(id);
+
+let chess = new Chess();
+let you = "w", engineColor = "b";
+let clocks = { w: 0, b: 0 }, inc = 0, running = null, turnStart = 0;
+let premoves = [], selected = null, lastMove = null;
+let gameOn = false, engineBusy = false, gameToken = 0, result = "*", ending = "";
+let fileName = "", startDate = "", settings = {};
+let drag = null;
+
+// ---------------------------------------------------------------- board model
+
+function fenMap(fen) {
+  const map = {};
+  fen.split(" ")[0].split("/").forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { f += +ch; continue; }
+      map[FILES[f] + (8 - i)] = { t: ch.toLowerCase(), c: ch === ch.toUpperCase() ? "w" : "b" };
+      f++;
+    }
+  });
+  return map;
+}
+
+// What the board looks like: the real position with the queued premoves played on it.
+function displayMap() {
+  const map = fenMap(chess.fen());
+  for (const m of premoves) {
+    const p = map[m.from];
+    if (!p) continue;
+    delete map[m.from];
+    if (p.t === "k" && Math.abs(fileOf(m.to) - fileOf(m.from)) === 2) {
+      const rank = m.from[1], kingside = fileOf(m.to) > fileOf(m.from);
+      const rook = map[(kingside ? "h" : "a") + rank];
+      delete map[(kingside ? "h" : "a") + rank];
+      if (rook) map[(kingside ? "f" : "d") + rank] = rook;
+    }
+    map[m.to] = p.t === "p" && (m.to[1] === "8" || m.to[1] === "1") ? { t: m.promotion, c: p.c } : p;
+  }
+  return map;
+}
+
+const fileOf = sq => FILES.indexOf(sq[0]);
+const rankOf = sq => +sq[1];
+
+// Premove destinations follow the piece's movement pattern only (like chess.com): the
+// position may change before it is played, so blockers and occupancy are ignored.
+function premoveOk(p, from, to) {
+  const dx = fileOf(to) - fileOf(from), dy = rankOf(to) - rankOf(from);
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  if (!ax && !ay) return false;
+  switch (p.t) {
+    case "n": return ax * ay === 2;
+    case "b": return ax === ay;
+    case "r": return !ax || !ay;
+    case "q": return ax === ay || !ax || !ay;
+    case "k": return Math.max(ax, ay) === 1
+      || (!dy && ax === 2 && from[0] === "e" && from[1] === (p.c === "w" ? "1" : "8"));
+    case "p": {
+      const dir = p.c === "w" ? 1 : -1, home = p.c === "w" ? 2 : 7;
+      return (!dx && (dy === dir || (dy === 2 * dir && rankOf(from) === home))) || (ax === 1 && dy === dir);
+    }
+  }
+  return false;
+}
+
+function legalTargets(from) {
+  return chess.moves({ square: from, verbose: true }).map(m => m.to);
+}
+
+function premoveTargets(from) {
+  const map = displayMap(), p = map[from], out = [];
+  if (!p) return out;
+  for (const f of FILES) for (let r = 1; r <= 8; r++) if (premoveOk(p, from, f + r)) out.push(f + r);
+  return out;
+}
+
+// ---------------------------------------------------------------- rendering
+
+function render() {
+  const board = $("board"), map = displayMap();
+  const flip = you === "b";
+  const pre = new Set(premoves.flatMap(m => [m.from, m.to]));
+  let targets = new Set();
+  if (selected && gameOn) targets = new Set(myTurnNow() ? legalTargets(selected) : premoveTargets(selected));
+  const checkSq = chess.in_check() ? kingSquare(chess.turn()) : null;
+  board.innerHTML = "";
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const f = flip ? 7 - col : col, r = flip ? row + 1 : 8 - row;
+      const sq = FILES[f] + r, el = document.createElement("div");
+      el.className = "sq " + ((f + r) % 2 ? "d" : "l");
+      el.dataset.sq = sq;
+      if (lastMove && (sq === lastMove.from || sq === lastMove.to) && !pre.has(sq)) el.classList.add("last");
+      if (pre.has(sq)) el.classList.add("pre");
+      if (sq === selected) el.classList.add("sel");
+      if (sq === checkSq && !premoves.length) el.classList.add("check");
+      if (targets.has(sq)) el.classList.add(map[sq] ? "ring" : "dot");
+      if (row === 7) el.insertAdjacentHTML("beforeend", `<span class="coord f">${FILES[f]}</span>`);
+      if (col === 0) el.insertAdjacentHTML("beforeend", `<span class="coord r">${r}</span>`);
+      const p = map[sq];
+      if (p) {
+        const s = document.createElement("span");
+        s.className = "pc " + p.c + (drag && drag.from === sq ? " lifted" : "");
+        s.textContent = GLYPH[p.t] + "︎";
+        el.appendChild(s);
+      }
+      board.appendChild(el);
+    }
+  }
+  renderMoves();
+  renderCaptured();
+  renderClocks();
+  $("note").textContent = premoves.length
+    ? `${premoves.length} premove${premoves.length > 1 ? "s" : ""} queued. Right-click to cancel.`
+    : "Premoves: make moves while the engine thinks. Right-click cancels them.";
+}
+
+function kingSquare(color) {
+  const map = fenMap(chess.fen());
+  return Object.keys(map).find(sq => map[sq].t === "k" && map[sq].c === color);
+}
+
+function renderMoves() {
+  const h = chess.history(), box = $("moves");
+  let html = "";
+  for (let i = 0; i < h.length; i += 2)
+    html += `<div><span>${i / 2 + 1}.</span><span>${h[i]}</span><span>${h[i + 1] || ""}</span></div>`;
+  if (result !== "*") html += `<div><span></span><span>${result}</span><span></span></div>`;
+  box.innerHTML = html;
+  box.scrollTop = box.scrollHeight;
+}
+
+// Captured pieces next to each player (what is missing from the opponent's starting set)
+// and the material lead of the side that is ahead, as on lichess and chess.com.
+const START = { p: 8, n: 2, b: 2, r: 2, q: 1 }, VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+
+function renderCaptured() {
+  const count = { w: {}, b: {} }, material = { w: 0, b: 0 };
+  for (const p of Object.values(fenMap(chess.fen()))) {
+    if (p.t === "k") continue;
+    count[p.c][p.t] = (count[p.c][p.t] || 0) + 1;
+    material[p.c] += VALUE[p.t];
+  }
+  for (const [id, c] of [["topCap", engineColor], ["botCap", you]]) {
+    const them = c === "w" ? "b" : "w";
+    let html = "";
+    for (const t of ["p", "n", "b", "r", "q"]) {
+      const n = Math.max(0, START[t] - (count[them][t] || 0));
+      if (n) html += `<span class="pc ${them}">${GLYPH[t]}\uFE0E</span>`.repeat(n) + '<span class="gap"></span>';
+    }
+    const lead = material[c] - material[them];
+    if (lead > 0) html += `<span class="adv">+${lead}</span>`;
+    $(id).innerHTML = html;
+  }
+}
+
+function remaining(c) {
+  return clocks[c] - (running === c ? performance.now() - turnStart : 0);
+}
+
+function fmt(ms) {
+  ms = Math.max(0, ms);
+  const s = ms / 1000, m = Math.floor(s / 60), sec = s - m * 60;
+  return s < 20 ? `${m}:${sec.toFixed(1).padStart(4, "0")}` : `${m}:${String(Math.floor(sec)).padStart(2, "0")}`;
+}
+
+function renderClocks() {
+  for (const [id, c] of [["topClock", engineColor], ["botClock", you]]) {
+    const el = $(id), ms = remaining(c);
+    el.textContent = fmt(ms);
+    el.classList.toggle("running", running === c && gameOn);
+    el.classList.toggle("low", ms < 20000);
+  }
+}
+
+// ---------------------------------------------------------------- game flow
+
+const myTurnNow = () => gameOn && !engineBusy && chess.turn() === you;
+
+function stopClock(c) {
+  clocks[c] -= performance.now() - turnStart;
+  running = null;
+}
+
+function startClock(c) {
+  running = c;
+  turnStart = performance.now();
+}
+
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+function uci(m) {
+  return m.from + m.to + (m.promotion || "");
+}
+
+async function startGame() {
+  const [base, incr] = $("tc").value.split("+").map(Number);
+  you = $("color").value === "r" ? (Math.random() < .5 ? "w" : "b") : $("color").value;
+  engineColor = you === "w" ? "b" : "w";
+  settings = { style: $("style").value, eval: $("eval").value, variety: +$("variety").value,
+               contempt: +$("contempt").value, options: advancedValues() };
+  savePrefs();
+  $("status").textContent = "Starting the engine...";
+  await api("/api/new", settings);
+  chess = new Chess();
+  clocks = { w: base * 60000, b: base * 60000 };
+  inc = incr * 1000;
+  premoves = []; selected = null; lastMove = null; result = "*"; ending = "";
+  gameOn = true; engineBusy = false; gameToken++;
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  startDate = `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())}`;
+  fileName = `game-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  $("topName").textContent = engineLabel();
+  $("botName").textContent = "You";
+  $("thought").textContent = "";
+  setControls();
+  if (chess.turn() === you) { startClock(you); $("status").textContent = "Your move."; render(); }
+  else engineMove();
+}
+
+function engineLabel() {
+  const extra = [settings.style !== "Objective" && settings.style, settings.eval !== "PeSTO" && settings.eval].filter(Boolean);
+  return "Engine" + (extra.length ? ` (${extra.join(", ")})` : "");
+}
+
+function setControls() {
+  for (const id of ["color", "tc", "style", "eval", "variety", "contempt", "newBtn"]) $(id).disabled = gameOn;
+  for (const el of $("advGrid").querySelectorAll("input, select")) el.disabled = gameOn;
+  $("resignBtn").disabled = !gameOn;
+  $("analyzeBtn").disabled = gameOn || !fileName;
+}
+
+function playUserMove(move, zeroTime) {
+  if (zeroTime) running = null;   // a premove: the clock never started, nothing is spent
+  else stopClock(you);
+  chess.move(move);
+  clocks[you] += inc;
+  lastMove = { from: move.from, to: move.to };
+  save();
+  if (checkEnd()) return;
+  engineMove();
+}
+
+async function engineMove() {
+  engineBusy = true;
+  const token = gameToken;
+  $("status").textContent = "Engine is thinking...";
+  startClock(engineColor);
+  render();
+  let reply;
+  try {
+    reply = await api("/api/go", {
+      moves: chess.history({ verbose: true }).map(uci),
+      wtime: Math.round(remaining("w")), btime: Math.round(remaining("b")), winc: inc, binc: inc,
+    });
+  } catch (e) {
+    $("status").textContent = "Engine error: " + e.message;
+    return;
+  }
+  if (token !== gameToken || !gameOn) return;   // game ended (flag, resign) meanwhile
+  stopClock(engineColor);
+  clocks[engineColor] += inc;
+  engineBusy = false;
+  const m = reply.move;
+  chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+  lastMove = { from: m.slice(0, 2), to: m.slice(2, 4) };
+  showThought(reply);
+  save();
+  if (checkEnd()) return;
+
+  // Play the first premove at once, without starting your clock. An illegal premove
+  // cancels the whole queue, as on chess.com.
+  while (premoves.length) {
+    const pm = premoves.shift();
+    const legal = chess.moves({ verbose: true }).find(x => x.from === pm.from && x.to === pm.to
+      && (!x.promotion || x.promotion === pm.promotion));
+    if (legal) { selected = null; playUserMove(legal, true); return; }
+    premoves = [];
+  }
+  startClock(you);
+  $("status").textContent = "Your move.";
+  render();
+}
+
+function showThought(reply) {
+  if (!$("showThought").checked || !reply.score) { $("thought").textContent = ""; return; }
+  const s = reply.score, sign = engineColor === "w" ? 1 : -1;
+  const text = s.kind === "mate" ? `mate in ${Math.abs(s.value)} for ${s.value * sign > 0 ? "White" : "Black"}`
+    : `${(s.value * sign / 100 >= 0 ? "+" : "") + (s.value * sign / 100).toFixed(2)} (White's view)`;
+  $("thought").textContent = `Engine's eval: ${text}` + (reply.reason ? ` | ${reply.reason}` : "");
+}
+
+function checkEnd() {
+  if (!chess.game_over()) return false;
+  if (chess.in_checkmate()) finish(chess.turn() === "w" ? "0-1" : "1-0", "checkmate");
+  else if (chess.in_stalemate()) finish("1/2-1/2", "stalemate");
+  else if (chess.in_threefold_repetition()) finish("1/2-1/2", "threefold repetition");
+  else if (chess.insufficient_material()) finish("1/2-1/2", "insufficient material");
+  else finish("1/2-1/2", "the 50-move rule");
+  return true;
+}
+
+function finish(res, why) {
+  if (!gameOn) return;
+  if (running) stopClock(running);
+  gameOn = false; engineBusy = false; gameToken++;
+  result = res; ending = why; premoves = []; selected = null;
+  const won = (res === "1-0" && you === "w") || (res === "0-1" && you === "b");
+  $("status").textContent = (res === "1/2-1/2" ? "Draw" : won ? "You won" : "You lost") + ` by ${why}.`;
+  save();
+  setControls();
+  render();
+}
+
+function tick() {
+  if (!gameOn || !running) return;
+  if (remaining(running) <= 0) {
+    const loser = running;
+    clocks[loser] = 0; running = null;
+    finish(loser === "w" ? "0-1" : "1-0", "time");
+    return;
+  }
+  renderClocks();
+}
+
+// ---------------------------------------------------------------- saving and analysis
+
+function pgnText() {
+  const tc = $("tc").value.split("+");
+  const h = chess.history();
+  let moves = "";
+  for (let i = 0; i < h.length; i++) moves += (i % 2 ? "" : `${i / 2 + 1}. `) + h[i] + " ";
+  const head = {
+    Event: "Casual game", Site: "Local", Date: startDate,
+    White: you === "w" ? "You" : engineLabel(), Black: you === "b" ? "You" : engineLabel(),
+    Result: result, TimeControl: `${tc[0] * 60}+${tc[1]}`, Termination: ending || "unterminated",
+  };
+  return Object.entries(head).map(([k, v]) => `[${k} "${v}"]`).join("\n") + "\n\n" + (moves + result).trim();
+}
+
+async function save() {
+  try { await api("/api/save", { file: fileName, pgn: pgnText() }); }
+  catch (e) { $("note").textContent = "Couldn't save the game: " + e.message; }
+}
+
+async function analyze() {
+  $("analyzeBtn").disabled = true;
+  $("status").textContent = "Analysing with the coach (about a minute)...";
+  try {
+    const r = await api("/api/analyze", { file: fileName });
+    $("status").textContent = `Report opened: ${r.report}`;
+  } catch (e) {
+    $("status").textContent = "Analysis failed: " + e.message;
+  }
+  $("analyzeBtn").disabled = false;
+}
+
+// ---------------------------------------------------------------- input
+
+function tryMove(from, to) {
+  if (!gameOn || from === to) return;
+  const promotion = $("promo").value;
+  if (myTurnNow()) {
+    const m = chess.moves({ verbose: true }).find(x => x.from === from && x.to === to && (!x.promotion || x.promotion === promotion));
+    if (m) { selected = null; playUserMove(m, false); }
+    return;
+  }
+  const p = displayMap()[from];
+  if (p && p.c === you && premoveOk(p, from, to)) {
+    premoves.push({ from, to, promotion });
+    selected = null;
+    render();
+  }
+}
+
+function ownPiece(sq) {
+  const p = displayMap()[sq];
+  return p && p.c === you;
+}
+
+function squareAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const sq = el && el.closest(".sq");
+  return sq ? sq.dataset.sq : null;
+}
+
+$("board").addEventListener("pointerdown", e => {
+  if (e.button !== 0 || !gameOn) return;
+  const sq = squareAt(e.clientX, e.clientY);
+  if (!sq) return;
+  if (selected && sq !== selected && !ownPiece(sq)) { tryMove(selected, sq); return; }
+  if (!ownPiece(sq)) { selected = null; render(); return; }
+  selected = sq;
+  const ghost = document.createElement("span");
+  const p = displayMap()[sq];
+  ghost.className = `pc ${p.c} ghost`;
+  ghost.textContent = GLYPH[p.t] + "︎";
+  ghost.style.left = e.clientX + "px"; ghost.style.top = e.clientY + "px";
+  document.body.appendChild(ghost);
+  drag = { from: sq, ghost };
+  render();
+});
+
+window.addEventListener("pointermove", e => {
+  if (!drag) return;
+  drag.ghost.style.left = e.clientX + "px";
+  drag.ghost.style.top = e.clientY + "px";
+});
+
+window.addEventListener("pointerup", e => {
+  if (!drag) return;
+  const from = drag.from, to = squareAt(e.clientX, e.clientY);
+  drag.ghost.remove();
+  drag = null;
+  if (to && to !== from) tryMove(from, to);   // dropped elsewhere: a move; on itself: stays selected
+  render();
+});
+
+$("board").addEventListener("contextmenu", e => {
+  e.preventDefault();
+  premoves = []; selected = null;
+  render();
+});
+
+$("newBtn").onclick = () => startGame().catch(e => { $("status").textContent = "Couldn't start: " + e.message; });
+$("resignBtn").onclick = () => finish(you === "w" ? "0-1" : "1-0", "resignation");
+$("analyzeBtn").onclick = analyze;
+
+// ---------------------------------------------------------------- settings
+
+// Every other UCI option the engine reports, so nothing En Croissant shows is missing here.
+const HINTS = {
+  "Threads": "CPU cores it thinks with. More is stronger; keep 1 while the overnight tests run.",
+  "Hash": "Memory in MB for remembering positions it has seen. 64 to 256 is plenty.",
+  "MultiPV": "Lines it compares at once. Above 1 makes it play weaker; it is meant for analysis.",
+  "Move Overhead": "Milliseconds kept in reserve each move for lag. Leave it at 30.",
+  "RandomMover": "Plays random legal moves instead of thinking: for fun or testing.",
+};
+let engineOptions = [];
+
+function renderAdvanced(options) {
+  engineOptions = options;
+  $("advGrid").innerHTML = options.map(o => {
+    const id = "opt-" + o.name.replace(/\W/g, "_");
+    const hint = `<span class="hint">${HINTS[o.name] || ""}</span>`;
+    if (o.type === "check")
+      return `<label class="wide check-row"><input type="checkbox" id="${id}" ${o.default === "true" ? "checked" : ""}> ${o.name}</label>`
+        + `<span class="hint wide" style="margin-top:-6px">${HINTS[o.name] || ""}</span>`;
+    const input = o.type === "spin"
+      ? `<input id="${id}" type="number" min="${o.min}" max="${o.max}" value="${o.default}">`
+      : o.type === "combo"
+        ? `<select id="${id}">${o.vars.map(v => `<option ${v === o.default ? "selected" : ""}>${v}</option>`).join("")}</select>`
+        : `<input id="${id}" type="text" value="${o.default === "<empty>" ? "" : o.default}">`;
+    return `<label class="wide">${o.name} ${input} ${hint}</label>`;
+  }).join("");
+}
+
+function advancedValues() {
+  const out = {};
+  for (const o of engineOptions) {
+    const el = $("opt-" + o.name.replace(/\W/g, "_"));
+    if (el) out[o.name] = el.type === "checkbox" ? String(el.checked) : el.value;
+  }
+  return out;
+}
+
+// The last settings are remembered in this browser (best effort: storage may be unavailable).
+const PREF_IDS = ["color", "tc", "style", "eval", "variety", "contempt", "promo"];
+
+function savePrefs() {
+  try {
+    const prefs = { options: advancedValues(), showThought: $("showThought").checked };
+    for (const id of PREF_IDS) prefs[id] = $(id).value;
+    localStorage.setItem("playSettings", JSON.stringify(prefs));
+  } catch (e) {}
+}
+
+function loadPrefs() {
+  let prefs;
+  try { prefs = JSON.parse(localStorage.getItem("playSettings") || "null"); } catch (e) {}
+  if (!prefs) return;
+  for (const id of PREF_IDS) {
+    const el = $(id), v = prefs[id];
+    if (v === undefined || (el.tagName === "SELECT" && ![...el.options].some(o => o.value === v))) continue;
+    el.value = v;
+  }
+  $("showThought").checked = !!prefs.showThought;
+  for (const [name, v] of Object.entries(prefs.options || {})) {
+    const el = $("opt-" + name.replace(/\W/g, "_"));
+    if (!el) continue;
+    if (el.type === "checkbox") el.checked = v === "true"; else el.value = v;
+  }
+}
+
+for (const id of ["promo", "showThought"]) $(id).addEventListener("change", savePrefs);
+
+fetch("/api/info").then(r => r.json()).then(info => {
+  $("eval").innerHTML = info.evals.map(e => `<option>${e}</option>`).join("");
+  renderAdvanced(info.options || []);
+  loadPrefs();
+  previewClocks();
+}).catch(() => {});
+
+// Before a game, the clocks show the chosen time control.
+function previewClocks() {
+  if (gameOn) return;
+  const base = +$("tc").value.split("+")[0];
+  clocks = { w: base * 60000, b: base * 60000 };
+  renderClocks();
+}
+$("tc").onchange = previewClocks;
+
+setInterval(tick, 100);
+previewClocks();
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+# Texel-tuned on 3000000 positions from:
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part0.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part1.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part2.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part3.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part4.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part5.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen0/part6.bin (Learned material-only)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part0.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part1.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part2.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part3.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part4.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part5.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+#   /Users/arunaditya/dev/chess-engine/build/data/learned/gen1/part6.bin (Learned /Users/arunaditya/dev/chess-engine/evals/learned/gen1.txt)
+# error 0.0888207 -> 0.0866346, K 0.474221, lambda 1
+# Learned evaluation weights (centipawns). Placement tables are from White's side,
+# drawn like a board: the first row is rank 8.
+
+value pawn 136 167
+mg pawn
+   -3   -3   -3   -3   -3   -3   -3   -3
+  113   18   26    6   31  123  140  319
+  -34  -70  -51  -47  -35   54   21   -8
+  -19  -24  -39   -6  -16  -34  -14  -13
+  -21  -48  -18  -18  -11  -10  -35  -36
+  -17  -30  -21  -43  -19  -29    0  -29
+   -2   -2  -11   -3   12   -2   24  -28
+   -3   -3   -3   -3   -3   -3   -3   -3
+eg pawn
+  -39  -39  -39  -39  -39  -39  -39  -39
+  -58   72   37   63   80   34  -29 -147
+   44   81   94   78   28   -2   12   19
+   46  -14   13  -37  -17    2   -7   17
+  -38  -17  -60  -56  -64  -51  -18   -1
+   18    4   -3  -24  -30   -8  -16   16
+  -22   15  -25  -30    0  -12    2   17
+  -39  -39  -39  -39  -39  -39  -39  -39
+
+value knight 752 114
+mg knight
+ -287 -135  -99  -35   40  -51  231   -3
+  -95   65  -23   61  140   54   55  -23
+   38   12   15    1  124  118   31 -122
+   59   38  -12   15   60    4   28  -44
+   -9  -49   25   10   17   13  149  -14
+  -26  -63  -13    9   39   16   -1   -1
+  -27  -21   -3   -5    4   47   36   -7
+  -41  -32 -119  -30  -49  -35  -33    9
+eg knight
+   32  -66   -1  -14  -53  -84 -159  -69
+   -1  -20   54  -23  -43   11  -71 -128
+  -18    3   50   99   12   36   -6  -28
+  -42   31  124   83   65   90   31  -56
+  -34   32   73   83  100   63  -66  -48
+   12   38   88   84   59   39  -12  -24
+  -44  -18   16   18   21   -8  -95  -88
+  -22    5   30  -40  -47  -13    7 -103
+
+value bishop 765 146
+mg bishop
+  -95 -110  -90 -111 -122  -70 -147  -36
+  -98  -61   32  161  -44   -3   35  -22
+  -19   54  -37   72   41   48   42   72
+   29   30   45   49   -8   93   44  -28
+   60    8   18   80   11   32  -10  -46
+   -4   -9   42    7   15   49   27  -30
+ -115   39   34   63   39    9   20  114
+  -30 -100   31  -18   31    0  -14  -84
+eg bishop
+   14   26  -20   -7  -23  -28  -18    4
+   47   33  -14  -45  -29    0   17  -71
+  -58  -24   67   42   -1   77   -6  -38
+  -45  -29   37   56  104   13    6  -11
+  -53  -27   56   53   70   34   -2  -31
+   15  -13   23   26   32    3  -30  -23
+   34  -17  -28  -27  -16  -28  -20  -73
+   -5   31   -5   -3   -8    2  -72   10
+
+value rook 1316 327
+mg rook
+  -47   64   99  287  336  324   99  173
+   -8    7   14  309  191  110    2  -46
+   33   29   72  145   19   43    9   40
+  -29  -36  -63   24    3   -7  -94  -59
+  -47 -125  -90  -44  -44  -92  -50 -125
+  -67  -83  -71  -81  -33  -24  -64  -67
+  -63  -34  -31  -19  -46  -85  -47  -88
+  -85  -70  -46  -16  -35  -71  -78  -83
+eg rook
+   57   16    6  -45  -68 -112  -49  -29
+   44   46   35  -81  -47  -14   -6   45
+   -1   -8  -22  -43  -13  -29   13  -17
+    6  -12   22  -27  -13   19   28    8
+    3    6   16   -1   10   38   19   42
+   10   -8    8   18   -7  -44  -17    7
+    2  -39   -1   16  -27  -33  -20    0
+   53   46   43   22   -1   24   36   41
+
+value queen 3377 224
+mg queen
+  -56  155  159  332  364  385  130  -25
+  -36  -43   46  190  423   37  165   90
+   68  -23   19   41   37  -23   61   92
+   -5  -83  -45  -79  -41  -52  -85  -41
+  -70  -85  -67  -79 -103  -39 -100  -78
+  -91  -73  -60  -55 -135  -70  -19  -57
+ -142  -24  -54  -38  -22  -45  -51  -66
+ -117  -61  -41  -58  -30  -29  -58  -83
+eg queen
+ -127 -205 -239 -300 -345 -365 -255 -124
+ -187   55  -36 -186 -344 -188 -237 -394
+ -260  -21  -21  -23  -65  -30 -143 -372
+ -175  173  148  364  238  352   -5   75
+  125  233  247  305  356  362  353   77
+   23  155  173  212  234  246   86   69
+  105  -27   47   -5  -33  -32   14   -4
+   57   37  -30   77  -74  -69 -131   10
+
+value king 0 0
+mg king
+  627  234 -158  251  158 -685 -304 -288
+  492  -12   21  148  122 -104  -93 -102
+  333  347   -5   82 -174  165   63  -47
+   18  -16   27 -109  -53  173 -228 -164
+   77  -79 -268 -126 -183   20 -129 -276
+   96  -47   45  -65  -32   -7   83  -20
+  -87  -59   35    9    9   53   67  120
+ -194  -12    6  -17   22   13   70   99
+eg king
+   -6   61   74 -105  -19  145  -10   -5
+ -136  -51   54   52   56   27  -74   75
+  -75  -72   32   54  102  -21  -41  -38
+   56   48   44   84  107   -1  -24  -73
+  -24   83  119   69  113  -38   31  -11
+  -64   -7  -18   20    7  -10  -99  -48
+   12   -6  -55  -32    7  -35  -83 -103
+   85   24  -19  -22  -31  -29  -64  -80
+
+# Classical terms: mg/eg pairs, one per table entry.
+
+# safe squares attacked, 0-8
+mobility_knight
+  -50 -48  -33 31  -24 52  -18 57  -5 32  -1 35  17 -8  25 -30
+  96 -129 
+
+# safe squares attacked, 0-13
+mobility_bishop
+  -75 -61  -40 -10  -38 32  -28 67  -24 82  -20 76  -21 78  -2 39
+  -2 45  17 6  50 -45  18 -68  91 -109  83 -139 
+
+# safe squares attacked, 0-14
+mobility_rook
+  -98 -28  -87 -44  -83 -21  -75 7  -72 21  -58 27  -50 25  -43 30
+  -42 55  -30 44  3 38  8 28  45 3  104 -12  488 -174 
+
+# safe squares attacked, 0-27
+mobility_queen
+  -171 114  -175 80  -162 -74  -156 -9  -155 -2  -154 -2  -154 64  -154 131
+  -149 174  -146 188  -135 204  -134 233  -137 298  -131 292  -111 250  -106 283
+  -113 297  -103 255  -40 150  1 50  124 -33  337 -325  180 -126  588 -517
+  564 -456  346 -658  87 -198  367 -639 
+
+# rank, from its own side (1-8)
+passed_pawn
+  0 0  -74 -17  -72 -17  -101 58  -55 54  7 60  184 48  0 0
+
+# rank; extra when the square ahead is occupied
+passed_blocked
+  0 0  -7 -59  -6 13  -6 9  16 -66  2 -91  -152 -41  0 0
+
+# own king's distance to the square ahead, 0-7
+passed_own_king
+  -632 365  -110 94  65 15  65 5  83 5  61 18  55 15  71 -28
+
+# enemy king's distance to the square ahead, 0-7
+passed_their_king
+  -52 -68  17 -49  3 2  31 33  35 65  40 69  -53 101  -106 148
+
+# per pawn with another own pawn ahead on its file
+doubled_pawn
+  10 -16 
+
+# per pawn with no own pawn on adjacent files
+isolated_pawn
+  -11 -5 
+
+# per pawn that can't be supported and can't advance safely
+backward_pawn
+  -6 -12 
+
+# rank; pawn defended by or side by side with another
+connected_pawn
+  0 0  -4 -3  0 -8  15 14  40 22  144 75  169 55  0 0
+
+# two or more bishops
+bishop_pair
+  38 104 
+
+# per rook on a file without pawns
+rook_open_file
+  136 -106 
+
+# per rook on a file with only enemy pawns
+rook_semiopen_file
+  57 -39 
+
+# pawn-defended knight no enemy pawn can chase away
+knight_outpost
+  44 57 
+
+# same for a bishop
+bishop_outpost
+  52 48 
+
+# attack units on the enemy king zone, 0-24
+king_attack
+  -29 12  -12 -95  -13 -81  -31 -30  -42 -19  -32 -24  -35 -13  -31 -21
+  -11 -15  18 -21  40 2  -6 90  -22 150  84 127  152 58  180 205
+  5 489  170 12  -124 819  -209 773  333 526  -38 96  624 580  299 129
+  163 127 
+
+# own pawns just in front of the king, 0-3
+pawn_shield
+  -26 -1  17 -3  24 22  36 16 
+
+# files at the king without own pawns, 0-3
+king_open_files
+  7 27  -16 4  -28 15  9 -18 
+
+# enemy piece attacked by a pawn, by its type
+threat_by_pawn
+  0 0  89 15  71 113  121 -20  65 170  0 0 
+
+# enemy piece attacked by a knight or bishop
+threat_by_minor
+  -8 21  26 33  50 53  87 5  74 156  0 0 
+
+# enemy piece attacked by a rook
+threat_by_rook
+  -59 90  -11 46  -9 53  -111 37  104 150  0 0 
+
+# enemy piece attacked and not defended
+hanging
+  28 77  44 22  35 -3  14 14  -2 -135  0 0 
+
+# side to move
+tempo
+  24 9 

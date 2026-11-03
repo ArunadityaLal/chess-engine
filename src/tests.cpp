@@ -3,16 +3,21 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "datagen.h"
 #include "eval.h"
+#include "nnue.h"
 #include "movegen.h"
 #include "perft.h"
 #include "position.h"
 #include "search.h"
+#include "style.h"
+#include "motifs.h"
 #include "tt.h"
 
 namespace {
@@ -151,6 +156,114 @@ int eval_of(const std::string& fen) {
     return Eval::evaluate(pos);
 }
 
+// A network with random weights, for testing the machinery (not the play).
+std::string random_network() {
+    std::ostringstream os;
+    uint64_t           seed = 99;
+    auto put = [&](auto value) { os.write(reinterpret_cast<const char*>(&value), sizeof value); };
+    auto rnd = [&](int range) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        return int16_t(int(seed >> 33) % (2 * range + 1) - range);
+    };
+    os.write("ENNUE1", 6);
+    put(int32_t(NNUE::HIDDEN));
+    for (int i = 0; i < NNUE::INPUTS * NNUE::HIDDEN; ++i)
+        put(rnd(20));
+    for (int i = 0; i < NNUE::HIDDEN; ++i)
+        put(int16_t(rnd(40) + 60));
+    for (int i = 0; i < 2 * NNUE::HIDDEN; ++i)
+        put(rnd(60));
+    put(int32_t(0));
+    return os.str();
+}
+
+void test_nnue() {
+    std::string        error;
+    std::istringstream net(random_network());
+    const bool         loaded = NNUE::load(net, error);
+    std::istringstream truncated(random_network().substr(0, 1000));
+    check(loaded && !NNUE::load(truncated, error), "NNUE: network loads; truncated file rejected");
+    Eval::use(Eval::Kind::NNUE);
+
+    // Random games: after every move and unmake, the incrementally updated accumulator
+    // must equal one computed from scratch.
+    uint64_t seed = 7;
+    int      bad = 0, positions = 0;
+    for (const std::string& fen : bench_fens()) {
+        Position pos;
+        pos.set(fen);
+        std::vector<Move> played;
+        for (int ply = 0; ply < 40; ++ply) {
+            MoveList legal;
+            generate_legal(pos, legal);
+            if (!legal.size())
+                break;
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            const Move m = legal.moves[(seed >> 33) % legal.size()];
+            pos.make_move(m);
+            played.push_back(m);
+            Position fresh = pos;
+            fresh.refresh_eval();
+            bad += std::memcmp(&fresh.accumulator(), &pos.accumulator(), sizeof(NNUE::Accumulator)) != 0;
+            ++positions;
+        }
+        while (!played.empty()) {
+            pos.unmake_move(played.back());
+            played.pop_back();
+        }
+        Position fresh = pos;
+        fresh.refresh_eval();
+        bad += std::memcmp(&fresh.accumulator(), &pos.accumulator(), sizeof(NNUE::Accumulator)) != 0;
+    }
+    check(!bad, "NNUE: incremental accumulator == from scratch over " + std::to_string(positions)
+                    + " moves and the unmakes");
+
+    int asymmetric = 0;
+    for (const std::string& fen : bench_fens())
+        asymmetric += eval_of(fen) != eval_of(flip_fen(fen));
+    Searcher     searcher;
+    SearchLimits limits;
+    limits.depth = 5;
+    Position start;
+    const bool searched = !searcher.search(start, limits, EngineOptions{}, false).lines.empty();
+    check(!asymmetric && searched, "NNUE: color-symmetric, and a search runs on it");
+
+    Eval::use(Eval::Kind::PeSTO);
+}
+
+void test_style() {
+    // Greek gift: Bxh7+ Kxh7 gives a bishop for a pawn; Nxe5-type trades come out even.
+    Position pos;
+    pos.set("r1bq1rk1/pppn1ppp/4p3/3pP3/1b1P4/2NB1N2/PPP2PPP/R2QK2R w KQ - 0 1");
+    const int sac   = Style::material_dip(pos, {Move(D3, H7), Move(G8, H7), Move(F3, G5)});
+    Position  trade = pos;
+    trade.set("rnbqkbnr/ppp2ppp/8/3pp3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3");
+    // exd5 Qxd5 Nc3: pawns traded; Nc3 then attacks the queen, no material changes.
+    const int even = Style::material_dip(trade, {Move(E4, D5), Move(D8, D5), Move(B1, C3)});
+    // The opponent takes first and is taken back: a dip for one ply only.
+    Position recapture;
+    recapture.set("rnbqkb1r/pppp1ppp/5n2/4p3/4P3/3P4/PPP2PPP/RNBQKBNR w KQkq - 1 3");
+    const int back = Style::material_dip(recapture, {Move(C1, G5), Move(F6, E4), Move(D3, E4)});
+    check(sac == -200 && even == 0 && back == 0,
+          "style: a sacrifice line dips material; trades and recaptures don't");
+
+    auto has = [](const std::string& fen, const std::string& uci, const std::string& motif) {
+        Position p;
+        p.set(fen);
+        for (const Motifs::Motif& f : Motifs::find(p, parse_uci_move(p, uci)))
+            if (f.name == motif)
+                return true;
+        return false;
+    };
+    check(has("r3k3/8/8/8/8/8/8/4K1N1 w - - 0 1", "g1f3", "fork") == false
+              && has("r3k3/8/8/3N4/8/8/8/4K3 w - - 0 1", "d5c7", "fork")
+              && has("4k3/8/2n5/8/8/8/8/4KB2 w - - 0 1", "f1b5", "pin")
+              && has("4k3/8/8/8/q7/8/8/3RK3 w - - 0 1", "d1d8", "check")
+              && has("6k1/5ppp/8/8/8/8/8/3RK3 w - - 0 1", "d1d8", "checkmate")
+              && has("4k3/8/8/8/8/8/1q5r/4K1R1 w - - 0 1", "g1g8", "check"),
+          "motifs: fork, pin, check and mate recognized");
+}
+
 void test_eval() {
     const std::vector<std::string> fens = bench_fens();
     std::string error;
@@ -189,8 +302,61 @@ void test_eval() {
     check(!Eval::load_learned(bad, error) && learned.front() == eval_of(fens.front()),
           "bad EvalFile rejected (" + error + "), weights unchanged");
 
+    // Every classical term with arbitrary weights: still color-symmetric, and the tuner's
+    // features must reproduce evaluate() exactly, or tuning would fit the wrong function.
+    std::vector<Score> weights = Eval::learned_params();
+    uint64_t           seed    = 12345;
+    for (size_t i = PIECE_TYPE_NB; i < weights.size(); ++i) {
+        seed       = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        weights[i] = {int(seed >> 33) % 61 - 30, int(seed >> 45) % 61 - 30};
+    }
+    std::istringstream random(Eval::learned_params_text(weights));
+    const bool         randomLoaded = Eval::load_learned(random, error);
+    Eval::use(Eval::Kind::Learned);
+    int asymmetric = 0, mismatched = 0;
+    std::vector<Eval::Feature> features;
+    for (const std::string& fen : fens) {
+        asymmetric += eval_of(fen) != eval_of(flip_fen(fen));
+        Position pos;
+        pos.set(fen);
+        Eval::features(pos, features);
+        Score sum;
+        for (const Eval::Feature& f : features)
+            sum += Score{weights[f.index].mg * f.coeff, weights[f.index].eg * f.coeff};
+        const int phase = std::min(pos.phase(), PHASE_MAX);
+        const int white = (sum.mg * phase + sum.eg * (PHASE_MAX - phase)) / PHASE_MAX;
+        mismatched += white != (pos.side_to_move() == WHITE ? 1 : -1) * Eval::evaluate(pos);
+    }
+    check(randomLoaded && !asymmetric && !mismatched && Eval::learned_params() == weights,
+          "Learned eval with all terms: symmetric, EvalFile round trip, features == evaluate");
+
+    // Normalizing (averages folded into piece values) must not change any evaluation.
+    std::vector<int> before;
+    for (const std::string& fen : fens)
+        before.push_back(eval_of(fen));
+    std::vector<Score> folded = weights;
+    Eval::normalize(folded, std::vector<uint64_t>(folded.size(), 1));
+    std::istringstream foldedFile(Eval::learned_params_text(folded));
+    Eval::load_learned(foldedFile, error);
+    Eval::use(Eval::Kind::Learned);
+    std::vector<int> after;
+    for (const std::string& fen : fens)
+        after.push_back(eval_of(fen));
+    check(before == after && folded != weights, "normalized Learned weights evaluate identically");
+
     Eval::load_learned("", error);
     Eval::use(Eval::Kind::PeSTO);
+
+    int badPacks = 0;
+    for (const std::string& fen : fens) {
+        Position pos;
+        pos.set(fen);
+        const PackedPos p = PackedPos::pack(pos, -123, 2);
+        const std::string f = p.fen();
+        badPacks += f.substr(0, f.find(' ') + 2) != fen.substr(0, fen.find(' ') + 2)
+                  || p.score != -123 || p.white_result() != 1.0f;
+    }
+    check(!badPacks, "training data: packed positions unpack to the same board and side");
 }
 
 void test_search(bool full) {
@@ -381,6 +547,8 @@ bool run_tests(bool full) {
     test_draws();
     test_perft(full);
     test_eval();
+    test_nnue();
+    test_style();
     test_see();
     test_tt();
     test_search(full);

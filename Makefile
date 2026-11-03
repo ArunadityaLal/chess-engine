@@ -4,6 +4,7 @@
 #          make test       -> quick self-tests on the sanitized debug build
 #          make perft      -> full perft gate on the release build
 #          make bench      -> bench signature (node count) for commit messages
+#          make trainer    -> NNUE trainer at build/release/nnue-train
 #          make clean
 
 EXE      := engine
@@ -28,7 +29,7 @@ OUT  := build/$(BUILD)
 OBJS := $(SRCS:src/%.cpp=$(OUT)/%.o)
 BIN  := $(OUT)/$(EXE)
 
-.PHONY: all release debug run test perft bench clean
+.PHONY: all release debug run test perft bench trainer clean
 
 all: $(BIN)
 
@@ -58,6 +59,12 @@ $(OUT)/%.o: src/%.cpp | $(OUT)
 
 $(OUT):
 	mkdir -p $@
+
+trainer: build/release/nnue-train
+
+build/release/nnue-train: tools/nnue/train.cpp
+	@mkdir -p build/release
+	$(CXX) -std=c++20 -O3 -march=native -DNDEBUG -Wall -Wextra -pthread $< -o $@
 
 clean:
 	rm -rf build

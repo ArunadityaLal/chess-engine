@@ -5,6 +5,7 @@
 
 #include "bitboard.h"
 #include "eval.h"
+#include "nnue.h"
 
 constexpr const char* StartFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -44,6 +45,7 @@ class Position {
     // Running sums kept up to date by the piece hooks; Eval::evaluate reads them.
     Score psq_score() const { return psqScore; }
     int   phase() const { return gamePhase; }
+    const NNUE::Accumulator& accumulator() const { return acc; }  // when NNUE::enabled
     void  refresh_eval();  // recompute both after Eval::use() switches evaluations
 
     // 50-move rule, repetition (one repeat counts, as is usual inside a search), or
@@ -79,7 +81,7 @@ class Position {
     void clear();
 
     // The only functions that modify board[] and the bitboards. They also keep the
-    // piece-square sum and game phase current; phase 8 adds the NNUE accumulator here.
+    // piece-square sum, game phase and NNUE accumulator current.
     void add_piece(Piece p, Square s);
     void remove_piece(Square s);
     void move_piece(Square from, Square to);
@@ -94,5 +96,6 @@ class Position {
     int                    gamePly;
     Score                  psqScore;
     int                    gamePhase;
+    NNUE::Accumulator      acc;
     std::vector<StateInfo> history;
 };

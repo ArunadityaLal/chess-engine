@@ -17,3 +17,6 @@ config.json
 
 # Python
 __pycache__/
+
+#private
+games/

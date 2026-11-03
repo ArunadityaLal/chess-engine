@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <random>
 #include <thread>
 #include <vector>
@@ -26,12 +27,18 @@ struct SearchLimits {
     int      perft          = 0;  // "go perft N": debugging, not a search
 };
 
+enum class StyleKind { Objective, Creative, Practical };  // see style.h
+
 // UCI options that affect searching.
 struct EngineOptions {
     int  multiPV      = 1;      // how many best lines to report
+    int  threads      = 1;      // search threads (Lazy SMP)
     int  moveOverhead = 30;     // ms kept in reserve per move for GUI and pipe lag
     bool thinkAloud   = false;  // explain each iteration in plain language
     bool randomMover  = false;  // play random legal moves (a test opponent)
+    int  contempt     = 0;      // cp: a draw is worth -contempt to the side that searches
+    StyleKind style   = StyleKind::Objective;
+    int  variety      = 0;      // cp: in the opening, pick randomly among moves this close
     bool quiescence   = true;   // tests only: false evaluates leaves statically
     bool exact        = false;  // tests only: plain fixed-depth alpha-beta (no table cutoffs,
                                 // pruning, reductions or extensions), so scores equal minimax
@@ -77,13 +84,19 @@ class Searcher {
 
   private:
     void         run();
+    // Lazy SMP helper: searches like the main thread, without printing or time control,
+    // until the main thread stops it. Shares only the transposition table.
+    void         helper_search(const Position& pos, const SearchLimits& limits,
+                               const EngineOptions& options);
+    uint64_t     total_nodes() const;
     SearchResult think(const Position& pos, bool print);
     int          search_root(Position& pos, int depth, int pvIdx, int alpha, int beta);
     int          negamax(Position& pos, int depth, int ply, int alpha, int beta,
                          bool canNull = true);
     int          qsearch(Position& pos, int ply, int alpha, int beta);
-    void         update_quiet_stats(Color us, int ply, int depth, Move best, const Move* quiets,
-                                    int quietCount);
+    void         update_quiet_stats(const Position& pos, int ply, int depth, Move best,
+                                    const Move* quiets, int quietCount);
+    int16_t*     cont_row(int ply);  // continuation history after the move made at ply
     int          minimax(Position& pos, int depth, int ply);
     int          minimax_q(Position& pos, int ply);
 
@@ -91,11 +104,16 @@ class Searcher {
     bool    should_stop();
     int64_t elapsed_ms() const;
     void    update_pv(int ply, Move m);
+    int     draw_score(int ply) const;
     void    report(int depth, int lines) const;
     void    think_aloud(const Position& pos, int depth, Move prevBest, int prevScore) const;
 
     std::thread       thread;
     std::atomic<bool> stopRequested{false};
+
+    int                                    helperId = 0;  // 0: the main thread
+    std::vector<std::unique_ptr<Searcher>> helpers;
+    std::atomic<uint64_t>                  sharedNodes{0};  // a helper's node count, for reports
     std::mt19937_64   rng;
 
     // Inputs of the current search.
@@ -115,5 +133,13 @@ class Searcher {
     int                                   pvLength[MAX_PLY];
     Move                                  pvHint[MAX_PLY];  // previous iteration's best line
     Move                                  killers[MAX_PLY][2];
+    int                                   evalStack[MAX_PLY];  // static eval per ply, -INF in check
+    Move                                  excludedMove[MAX_PLY];  // singular search: skip it
     int                                   history[COLOR_NB][SQUARE_NB][SQUARE_NB];
+    // pieceTo = piece * 64 + to-square of a move: what continuation history is keyed by.
+    static constexpr int PIECE_TO = PIECE_NB * SQUARE_NB;
+    int                  movedStack[MAX_PLY];  // pieceTo of the move made at each ply, -1: none
+    Move                 counterMoves[PIECE_TO];  // best reply to a pieceTo, by cutoffs
+    // contHist[a * PIECE_TO + b]: how good a move b has been one or two plies after a.
+    std::vector<int16_t> contHist;
 };

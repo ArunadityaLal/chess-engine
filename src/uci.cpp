@@ -7,19 +7,26 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "datagen.h"
 #include "eval.h"
+#include "motifs.h"
 #include "movegen.h"
+#include "nnue.h"
 #include "perft.h"
 #include "position.h"
 #include "search.h"
 #include "tests.h"
+#include "tune.h"
 #include "tt.h"
 
 namespace {
 
 std::mutex outputMutex;
 
-// position startpos|fen <fen> [moves <m1> <m2> ...]
+// Eval=NNUE may arrive before NNUEFile: remember it and switch once a network loads.
+bool wantNNUE = false;
+
+// position startpos|fen <fen> [moves <m1> <m2> ...]   (moves in UCI or SAN)
 void cmd_position(Position& pos, std::istringstream& is) {
     std::string token, fen;
     is >> token;
@@ -40,7 +47,9 @@ void cmd_position(Position& pos, std::istringstream& is) {
         return;
 
     while (is >> token) {
-        const Move m = parse_uci_move(pos, token);
+        Move m = parse_uci_move(pos, token);
+        if (!m.is_ok())
+            m = parse_san(pos, token);  // an extension: lets tools feed PGN moves directly
         if (!m.is_ok()) {
             UCI::send("info string illegal move: " + token);
             return;
@@ -83,19 +92,49 @@ void cmd_setoption(EngineOptions& options, Position& pos, std::istringstream& is
     try {
         if (name == "hash")
             TT.resize(std::clamp(std::stoi(value), 1, 65536));
+        else if (name == "threads")
+            options.threads = std::clamp(std::stoi(value), 1, 256);
         else if (name == "multipv")
             options.multiPV = std::clamp(std::stoi(value), 1, 64);
         else if (name == "move overhead")
             options.moveOverhead = std::clamp(std::stoi(value), 0, 5000);
-        else if (name == "thinkaloud")
+        else if (name == "variety")
+            options.variety = std::clamp(std::stoi(value), 0, 100);
+        else if (name == "contempt")
+            options.contempt = std::clamp(std::stoi(value), -200, 200);
+        else if (name == "style") {
+            if (value == "Objective")      options.style = StyleKind::Objective;
+            else if (value == "Creative")  options.style = StyleKind::Creative;
+            else if (value == "Practical") options.style = StyleKind::Practical;
+            else throw std::invalid_argument(value);
+        } else if (name == "thinkaloud")
             options.thinkAloud = on;
         else if (name == "randommover")
             options.randomMover = on;
         else if (name == "eval") {
-            if (value != "PeSTO" && value != "Learned")
+            if (value != "PeSTO" && value != "Learned" && value != "NNUE")
                 throw std::invalid_argument(value);
-            Eval::use(value == "PeSTO" ? Eval::Kind::PeSTO : Eval::Kind::Learned);
+            wantNNUE = value == "NNUE";
+            if (wantNNUE && !NNUE::loaded()) {
+                UCI::send("info string NNUE selected: load a network with NNUEFile (until then: Learned)");
+                Eval::use(Eval::Kind::Learned);
+            } else
+                Eval::use(value == "PeSTO" ? Eval::Kind::PeSTO
+                          : value == "NNUE" ? Eval::Kind::NNUE
+                                            : Eval::Kind::Learned);
             pos.refresh_eval();
+        } else if (name == "nnuefile") {
+            std::string error;
+            if (value.empty() || value == "<empty>")
+                return;
+            if (!NNUE::load(value, error))
+                UCI::send("info string NNUEFile not loaded: " + error);
+            else {
+                UCI::send("info string network loaded: " + value);
+                if (wantNNUE)
+                    Eval::use(Eval::Kind::NNUE);
+                pos.refresh_eval();
+            }
         } else if (name == "evalfile") {
             std::string error;
             const std::string path = value == "<empty>" ? "" : value;
@@ -149,6 +188,58 @@ void cmd_threats(const Position& pos, Searcher& searcher, std::istringstream& is
     UCI::send(msg);
 }
 
+// datagen [games N] [nodes N] [randomplies N] [seed N] out <file.bin>
+// Self-play training data with the current Eval/EvalFile.
+void cmd_datagen(std::istringstream& is) {
+    Datagen::Options o;
+    std::string      token;
+    while (is >> token) {
+        if (token == "games")            is >> o.games;
+        else if (token == "nodes")       is >> o.nodes;
+        else if (token == "randomplies") is >> o.randomPlies;
+        else if (token == "seed")        is >> o.seed;
+        else if (token == "out")         is >> o.out;
+    }
+    if (o.out.empty())
+        UCI::send("info string usage: datagen [games N] [nodes N] [randomplies N] [seed N] out <file>");
+    else
+        Datagen::run(o);
+}
+
+// tune [epochs N] [lr X] [lambda X] [positions N] [allowforeign] out <file> data <file>...
+// Texel-tunes the Learned eval, starting from the current EvalFile.
+void cmd_tune(std::istringstream& is) {
+    Tune::Options o;
+    std::string   token;
+    while (is >> token) {
+        if (token == "epochs")            is >> o.epochs;
+        else if (token == "lr")           is >> o.lr;
+        else if (token == "lambda")       is >> o.lambda;
+        else if (token == "positions")    is >> o.maxPositions;
+        else if (token == "allowforeign") o.allowForeign = true;
+        else if (token == "out")          is >> o.out;
+        else if (token == "data")
+            while (is >> token)
+                o.data.push_back(token);
+    }
+    if (o.out.empty() || o.data.empty())
+        UCI::send("info string usage: tune [epochs N] [lr X] [lambda X] [positions N] "
+                  "[allowforeign] out <file> data <file>...");
+    else
+        Tune::run(o);
+}
+
+// datadump <file.bin> [N]: the first N training positions as "FEN | score | result".
+void cmd_datadump(std::istringstream& is) {
+    std::string file;
+    size_t      n = 10;
+    is >> file >> n;
+    UCI::send("info string source: " + Datagen::source_eval(file));
+    for (const PackedPos& p : Datagen::load(file, n))
+        UCI::send(p.fen() + " | " + std::to_string(p.score) + " | "
+                  + (p.result == 2 ? "1-0" : p.result == 1 ? "1/2" : "0-1"));
+}
+
 // Runs one command. Returns false on "quit".
 bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const std::string& line) {
     std::istringstream is(line);
@@ -159,7 +250,8 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
     // running search. A well-behaved GUI sends "stop" itself; this keeps a sloppy one safe.
     const bool needsIdle = cmd == "ucinewgame" || cmd == "position" || cmd == "go"
                         || cmd == "setoption" || cmd == "perft" || cmd == "test"
-                        || cmd == "bench" || cmd == "threats" || cmd == "quit";
+                        || cmd == "bench" || cmd == "threats" || cmd == "datagen"
+                        || cmd == "tune" || cmd == "quit";
     if (needsIdle) {
         searcher.stop();
         searcher.wait();
@@ -168,13 +260,18 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
     if (cmd == "uci")
         UCI::send("id name engine\n"
                   "id author Arunaditya Lal\n"
+                  "option name Threads type spin default 1 min 1 max 256\n"
                   "option name Hash type spin default 16 min 1 max 65536\n"
                   "option name MultiPV type spin default 1 min 1 max 64\n"
                   "option name Move Overhead type spin default 30 min 0 max 5000\n"
                   "option name ThinkAloud type check default false\n"
+                  "option name Contempt type spin default 0 min -200 max 200\n"
+                  "option name Variety type spin default 0 min 0 max 100\n"
+                  "option name Style type combo default Objective var Objective var Creative var Practical\n"
                   "option name RandomMover type check default false\n"
-                  "option name Eval type combo default PeSTO var PeSTO var Learned\n"
+                  "option name Eval type combo default PeSTO var PeSTO var Learned var NNUE\n"
                   "option name EvalFile type string default <empty>\n"
+                  "option name NNUEFile type string default <empty>\n"
                   "uciok");
     else if (cmd == "isready")
         UCI::send("readyok");
@@ -202,6 +299,30 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
         std::string board = pos.pretty();
         board.pop_back();  // trailing newline
         UCI::send(board);
+    } else if (cmd == "fen")
+        UCI::send(pos.fen());
+    else if (cmd == "sanline") {  // sanline <uci moves>: the line in SAN, from this position
+        Position    p = pos;
+        std::string token, out;
+        while (is >> token) {
+            const Move m = parse_uci_move(p, token);
+            if (!m.is_ok())
+                break;
+            out += (out.empty() ? "" : " ") + to_san(p, m);
+            p.make_move(m);
+        }
+        UCI::send("info string san " + out);
+    } else if (cmd == "motifs") {  // motifs <move>: tactical patterns of a move here
+        std::string token;
+        is >> token;
+        Move m = parse_uci_move(pos, token);
+        if (!m.is_ok())
+            m = parse_san(pos, token);
+        std::string out;
+        if (m.is_ok())
+            for (const Motifs::Motif& f : Motifs::find(pos, m))
+                out += (out.empty() ? "" : "; ") + f.name + (f.detail.empty() ? "" : ": " + f.detail);
+        UCI::send("info string motifs " + (m.is_ok() ? out : "illegal move"));
     } else if (cmd == "eval") {
         std::string trace = Eval::trace(pos);
         trace.pop_back();
@@ -220,7 +341,13 @@ bool execute(Position& pos, Searcher& searcher, EngineOptions& options, const st
         int depth = 13;  // deep enough that the pruning near the leaves and above shows up
         is >> depth;
         run_bench(depth);
-    } else if (cmd == "test") {
+    } else if (cmd == "datagen")
+        cmd_datagen(is);
+    else if (cmd == "tune")
+        cmd_tune(is);
+    else if (cmd == "datadump")
+        cmd_datadump(is);
+    else if (cmd == "test") {
         std::string mode;
         is >> mode;
         run_tests(mode == "full");

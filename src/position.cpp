@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -73,6 +74,8 @@ void Position::clear() {
     gamePly    = 0;
     psqScore   = {};
     gamePhase  = 0;
+    if (NNUE::enabled)
+        NNUE::reset(acc);
     history.clear();
 }
 
@@ -221,6 +224,8 @@ void Position::add_piece(Piece p, Square s) {
     byColorBB[color_of(p)] |= b;
     psqScore += Eval::PieceSquare[p][s];
     gamePhase += Eval::PhaseWeight[type_of(p)];
+    if (NNUE::enabled)
+        NNUE::add(acc, p, s);
 }
 
 void Position::remove_piece(Square s) {
@@ -231,6 +236,8 @@ void Position::remove_piece(Square s) {
     board[s] = NO_PIECE;
     psqScore -= Eval::PieceSquare[p][s];
     gamePhase -= Eval::PhaseWeight[type_of(p)];
+    if (NNUE::enabled)
+        NNUE::remove(acc, p, s);
 }
 
 void Position::move_piece(Square from, Square to) {
@@ -242,15 +249,21 @@ void Position::move_piece(Square from, Square to) {
     board[to]   = p;
     psqScore += Eval::PieceSquare[p][to];
     psqScore -= Eval::PieceSquare[p][from];
+    if (NNUE::enabled)
+        NNUE::move(acc, p, from, to);
 }
 
 void Position::refresh_eval() {
     psqScore  = {};
     gamePhase = 0;
+    if (NNUE::enabled)
+        NNUE::reset(acc);
     for (Square s = A1; s <= H8; ++s)
         if (board[s] != NO_PIECE) {
             psqScore += Eval::PieceSquare[board[s]][s];
             gamePhase += Eval::PhaseWeight[type_of(board[s])];
+            if (NNUE::enabled)
+                NNUE::add(acc, board[s], s);
         }
 }
 
@@ -467,6 +480,15 @@ bool Position::is_consistent() const {
         }
     if (psq != psqScore || phase != gamePhase)
         return false;
+    if (NNUE::enabled) {
+        NNUE::Accumulator fresh;
+        NNUE::reset(fresh);
+        for (Square s = A1; s <= H8; ++s)
+            if (board[s] != NO_PIECE)
+                NNUE::add(fresh, board[s], s);
+        if (std::memcmp(&fresh, &acc, sizeof acc))
+            return false;
+    }
 
     for (int pt = PAWN; pt <= KING; ++pt)
         if (byType[pt] != byTypeBB[pt])
