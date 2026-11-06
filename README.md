@@ -51,8 +51,9 @@ Requires `clang++` with C++20 support.
 In En Croissant: Engines → Add new → Local, and pick `build/release/engine`.
 
 In the browser, with chess.com-style premoves (any number, played at zero clock time;
-right-click cancels), automatic saving of every game to `games/`, and an Analyse button
-that runs the coach on the finished game:
+right-click cancels), synthesized move/capture/check and game-result sounds (toggleable),
+automatic saving of every game to `games/`, and an Analyse button that runs the coach on
+the finished game:
 
 ```sh
 python3 tools/play/server.py          # opens http://localhost:8765

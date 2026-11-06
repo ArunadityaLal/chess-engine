@@ -111,6 +111,7 @@ details .grid { margin-top: 10px; }
       <label>Promote to
         <select id="promo"><option value="q">Queen</option><option value="r">Rook</option><option value="b">Bishop</option><option value="n">Knight</option></select></label>
       <label class="check-row"><input type="checkbox" id="showThought"> Show engine's eval</label>
+      <label class="check-row"><input type="checkbox" id="sound" checked> Sound effects</label>
     </div>
     <div class="thought" id="thought"></div>
     <div class="moves" id="moves"></div>
@@ -130,6 +131,90 @@ let premoves = [], selected = null, lastMove = null;
 let gameOn = false, engineBusy = false, gameToken = 0, result = "*", ending = "";
 let fileName = "", startDate = "", settings = {};
 let drag = null;
+let audioContext = null, audioMaster = null, audioCompressor = null;
+
+function unlockAudio() {
+  if (!$("sound").checked) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    $("note").textContent = "Sound is not supported by this browser.";
+    return;
+  }
+  try {
+    if (!audioContext) {
+      audioContext = new AudioContextClass();
+      audioMaster = audioContext.createGain();
+      audioMaster.gain.value = 1.5;
+      audioCompressor = audioContext.createDynamicsCompressor();
+      audioCompressor.threshold.value = -18;
+      audioCompressor.knee.value = 12;
+      audioCompressor.ratio.value = 8;
+      audioCompressor.attack.value = 0.003;
+      audioCompressor.release.value = 0.18;
+      audioMaster.connect(audioCompressor);
+      audioCompressor.connect(audioContext.destination);
+    }
+    if (audioContext.state === "suspended")
+      audioContext.resume().catch(e => { $("note").textContent = "Couldn't start sound: " + e.message; });
+  } catch (e) {
+    $("note").textContent = "Couldn't start sound: " + e.message;
+  }
+}
+
+function playTone(frequency, delay, duration, type = "sine", volume = 0.3, endFrequency = frequency) {
+  const start = audioContext.currentTime + delay;
+  const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, start);
+  oscillator.frequency.exponentialRampToValueAtTime(Math.max(1, endFrequency), start + duration);
+  gain.gain.setValueAtTime(volume, start);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  oscillator.connect(gain);
+  gain.connect(audioMaster);
+  oscillator.start(start);
+  oscillator.stop(start + duration);
+}
+
+function playMoveSound(move) {
+  if (!$("sound").checked) return;
+  unlockAudio();
+  if (!audioContext || audioContext.state !== "running") return;
+  const piecePitch = { p: 330, n: 440, b: 392, r: 294, q: 262, k: 349 };
+  const capture = !!move.captured || move.flags.includes("e");
+  const castle = move.flags.includes("k") || move.flags.includes("q");
+  const promotion = !!move.promotion;
+  if (capture) playTone(190, 0, 0.13, "triangle", 0.4, 75);
+  else if (castle) {
+    playTone(392, 0, 0.09, "sine");
+    playTone(523, 0.09, 0.11, "sine");
+  } else playTone(piecePitch[move.piece] || 330, 0, 0.075, "sine", 0.28);
+  if (promotion) {
+    playTone(392, 0.11, 0.1);
+    playTone(523, 0.21, 0.12);
+    playTone(659, 0.33, 0.16);
+  } else if (chess.in_check()) {
+    playTone(660, 0.12, 0.1, "square", 0.22);
+    playTone(880, 0.24, 0.13, "square", 0.22);
+  }
+}
+
+function playEndSound(won, draw) {
+  if (!$("sound").checked) return;
+  unlockAudio();
+  if (!audioContext || audioContext.state !== "running") return;
+  if (draw) {
+    playTone(392, 0, 0.2, "sine", 0.25);
+    playTone(349, 0.22, 0.28, "sine", 0.25);
+  } else if (won) {
+    playTone(523, 0, 0.14);
+    playTone(659, 0.14, 0.14);
+    playTone(784, 0.28, 0.28);
+  } else {
+    playTone(392, 0, 0.18);
+    playTone(330, 0.18, 0.18);
+    playTone(262, 0.36, 0.32);
+  }
+}
 
 // ---------------------------------------------------------------- board model
 
@@ -324,6 +409,7 @@ function uci(m) {
 }
 
 async function startGame() {
+  unlockAudio();
   const [base, incr] = $("tc").value.split("+").map(Number);
   you = $("color").value === "r" ? (Math.random() < .5 ? "w" : "b") : $("color").value;
   engineColor = you === "w" ? "b" : "w";
@@ -363,7 +449,8 @@ function setControls() {
 function playUserMove(move, zeroTime) {
   if (zeroTime) running = null;   // a premove: the clock never started, nothing is spent
   else stopClock(you);
-  chess.move(move);
+  const played = chess.move(move);
+  playMoveSound(played);
   clocks[you] += inc;
   lastMove = { from: move.from, to: move.to };
   save();
@@ -392,7 +479,8 @@ async function engineMove() {
   clocks[engineColor] += inc;
   engineBusy = false;
   const m = reply.move;
-  chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+  const played = chess.move({ from: m.slice(0, 2), to: m.slice(2, 4), promotion: m[4] });
+  playMoveSound(played);
   lastMove = { from: m.slice(0, 2), to: m.slice(2, 4) };
   showThought(reply);
   save();
@@ -436,6 +524,7 @@ function finish(res, why) {
   gameOn = false; engineBusy = false; gameToken++;
   result = res; ending = why; premoves = []; selected = null;
   const won = (res === "1-0" && you === "w") || (res === "0-1" && you === "b");
+  playEndSound(won, res === "1/2-1/2");
   $("status").textContent = (res === "1/2-1/2" ? "Draw" : won ? "You won" : "You lost") + ` by ${why}.`;
   save();
   setControls();
@@ -599,7 +688,7 @@ const PREF_IDS = ["color", "tc", "style", "eval", "variety", "contempt", "promo"
 
 function savePrefs() {
   try {
-    const prefs = { options: advancedValues(), showThought: $("showThought").checked };
+    const prefs = { options: advancedValues(), showThought: $("showThought").checked, sound: $("sound").checked };
     for (const id of PREF_IDS) prefs[id] = $(id).value;
     localStorage.setItem("playSettings", JSON.stringify(prefs));
   } catch (e) {}
@@ -615,6 +704,7 @@ function loadPrefs() {
     el.value = v;
   }
   $("showThought").checked = !!prefs.showThought;
+  if (prefs.sound !== undefined) $("sound").checked = !!prefs.sound;
   for (const [name, v] of Object.entries(prefs.options || {})) {
     const el = $("opt-" + name.replace(/\W/g, "_"));
     if (!el) continue;
@@ -622,7 +712,12 @@ function loadPrefs() {
   }
 }
 
-for (const id of ["promo", "showThought"]) $(id).addEventListener("change", savePrefs);
+$("promo").addEventListener("change", savePrefs);
+$("showThought").addEventListener("change", savePrefs);
+$("sound").addEventListener("change", () => {
+  savePrefs();
+  if ($("sound").checked) unlockAudio();
+});
 
 fetch("/api/info").then(r => r.json()).then(info => {
   $("eval").innerHTML = info.evals.map(e => `<option>${e}</option>`).join("");
